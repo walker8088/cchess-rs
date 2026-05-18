@@ -1,7 +1,7 @@
 //! Example of reading and writing XQF files
 use cchess_rs::board::Board;
 use cchess_rs::game::Game;
-use cchess_rs::xqf::XqfFile;
+use cchess_rs::xqf::{board_from_xqf, board_to_xqf, XqfFile};
 
 fn main() {
     println!("XQF File Format Example");
@@ -33,7 +33,7 @@ fn main() {
     println!("2. Testing board to XQF conversion:");
     let board = Board::new();
 
-    match board.to_xqf_board() {
+    match board_to_xqf(&board) {
         Ok(xqf_data) => {
             println!("   Successfully converted board to XQF format");
             println!("   Data length: {} bytes", xqf_data.len());
@@ -71,7 +71,7 @@ fn main() {
     // Place a black rook at (0, 9)
     test_data[9 * 9 + 0] = 13;
 
-    match Board::from_xqf_board(&test_data) {
+    match board_from_xqf(&test_data) {
         Ok(board) => {
             println!("   Successfully created board from XQF data");
 
@@ -92,4 +92,3 @@ fn main() {
     println!();
     println!("Example completed successfully!");
 }
-

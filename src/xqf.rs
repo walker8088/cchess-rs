@@ -10,7 +10,7 @@ use std::path::Path;
 
 use crate::board::Board;
 use crate::game::Game;
-use crate::pieces::PieceType;
+use crate::pieces::{Color, PieceType};
 
 /// XQF file header structure
 #[derive(Debug, Clone)]
@@ -93,6 +93,19 @@ pub enum XqfError {
     Unsupported,
     /// Other error with message
     Other(String),
+}
+
+impl std::fmt::Display for XqfError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            XqfError::Io(e) => write!(f, "I/O error: {}", e),
+            XqfError::InvalidSignature => write!(f, "Invalid XQF file signature"),
+            XqfError::InvalidVersion => write!(f, "Invalid XQF file version"),
+            XqfError::InvalidMoveData => write!(f, "Invalid move data"),
+            XqfError::Unsupported => write!(f, "Unsupported feature"),
+            XqfError::Other(msg) => write!(f, "{}", msg),
+        }
+    }
 }
 
 impl From<io::Error> for XqfError {
@@ -334,9 +347,9 @@ impl XqfFile {
             reader.seek(SeekFrom::Start(256))?;
             let mut board_buf = [0u8; 90];
             if reader.read_exact(&mut board_buf).is_ok() {
-                match Board::from_xqf_board(&board_buf) {
+                match board_from_xqf(&board_buf) {
                     Ok(board) => Some(board),
-                    Err(e) => return Err(XqfError::Other(e)),
+                    Err(e) => return Err(e),
                 }
             } else {
                 None
@@ -378,7 +391,7 @@ impl XqfFile {
 
         // Write initial board if available
         if let Some(board) = &self.initial_board {
-            match board.to_xqf_board() {
+            match board_to_xqf(board) {
                 Ok(board_buf) => {
                     writer.write_all(&board_buf)?;
                     // Pad to game info offset
@@ -389,7 +402,7 @@ impl XqfFile {
                         writer.write_all(&padding)?;
                     }
                 }
-                Err(e) => return Err(XqfError::Other(e)),
+                Err(e) => return Err(e),
             }
         } else {
             // Pad to game info offset
@@ -479,4 +492,81 @@ impl XqfFile {
         let date = (now.year() as u32) * 10000 + (now.month() as u32) * 100 + (now.day() as u32);
         Ok(date)
     }
+}
+
+// XQF-specific conversion functions (not part of Board to maintain generality)
+
+/// Convert board to XQF format byte array (90 bytes)
+pub fn board_to_xqf(board: &Board) -> Result<[u8; 90], XqfError> {
+    let mut data = [0u8; 90];
+
+    for row in 0..10 {
+        for col in 0..9 {
+            let index = row * 9 + col;
+
+            if let Some((piece_type, color)) = board.get_piece_at(col, row) {
+                let code = match (piece_type, color) {
+                    (PieceType::King, Color::Red) => 1,
+                    (PieceType::Advisor, Color::Red) => 2,
+                    (PieceType::Elephant, Color::Red) => 3,
+                    (PieceType::Knight, Color::Red) => 4,
+                    (PieceType::Rook, Color::Red) => 5,
+                    (PieceType::Cannon, Color::Red) => 6,
+                    (PieceType::Pawn, Color::Red) => 7,
+                    (PieceType::King, Color::Black) => 9,
+                    (PieceType::Advisor, Color::Black) => 10,
+                    (PieceType::Elephant, Color::Black) => 11,
+                    (PieceType::Knight, Color::Black) => 12,
+                    (PieceType::Rook, Color::Black) => 13,
+                    (PieceType::Cannon, Color::Black) => 14,
+                    (PieceType::Pawn, Color::Black) => 15,
+                    _ => 0,
+                };
+                data[index] = code;
+            }
+        }
+    }
+
+    Ok(data)
+}
+
+/// Create board from XQF format byte array (90 bytes)
+pub fn board_from_xqf(data: &[u8; 90]) -> Result<Board, XqfError> {
+    let mut board = Board::new();
+    board.clear();
+
+    for i in 0..90 {
+        let piece_code = data[i];
+        if piece_code == 0 {
+            continue;
+        }
+
+        let (col, row) = {
+            let row = i / 9;
+            let col = i % 9;
+            (col, row)
+        };
+
+        let (piece_type, color) = match piece_code {
+            1 => (PieceType::King, Color::Red),
+            2 => (PieceType::Advisor, Color::Red),
+            3 => (PieceType::Elephant, Color::Red),
+            4 => (PieceType::Knight, Color::Red),
+            5 => (PieceType::Rook, Color::Red),
+            6 => (PieceType::Cannon, Color::Red),
+            7 => (PieceType::Pawn, Color::Red),
+            9 => (PieceType::King, Color::Black),
+            10 => (PieceType::Advisor, Color::Black),
+            11 => (PieceType::Elephant, Color::Black),
+            12 => (PieceType::Knight, Color::Black),
+            13 => (PieceType::Rook, Color::Black),
+            14 => (PieceType::Cannon, Color::Black),
+            15 => (PieceType::Pawn, Color::Black),
+            _ => return Err(XqfError::InvalidMoveData),
+        };
+
+        board.set_piece_at(col, row, piece_type, color);
+    }
+
+    Ok(board)
 }

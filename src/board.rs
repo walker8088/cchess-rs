@@ -466,9 +466,7 @@ impl Board {
         dx + dy
     }
 
-    // XQF support methods
-
-    /// Get piece at position with type and color
+    /// Get piece at position with type and color (通用方法)
     pub fn get_piece_at(&self, col: usize, row: usize) -> Option<(PieceType, Color)> {
         let fen_char = self.get_fen(col, row);
         if fen_char == '.' {
@@ -481,7 +479,7 @@ impl Board {
         Some((piece_type, color))
     }
 
-    /// Set piece at position
+    /// Set piece at position (通用方法)
     pub fn set_piece_at(&mut self, col: usize, row: usize, piece_type: PieceType, color: Color) {
         let fen_char = match color {
             Color::Red => piece_type.to_fen_base(),
@@ -491,83 +489,8 @@ impl Board {
         self.set_fen(col, row, fen_char);
     }
 
-    /// Remove piece at position
+    /// Remove piece at position (通用方法)
     pub fn remove_piece_at(&mut self, col: usize, row: usize) {
         self.set_fen(col, row, '.');
-    }
-
-    /// Convert board to XQF format byte array (90 bytes)
-    pub fn to_xqf_board(&self) -> Result<[u8; 90], String> {
-        let mut data = [0u8; 90];
-
-        for row in 0..10 {
-            for col in 0..9 {
-                let index = row * 9 + col;
-
-                if let Some((piece_type, color)) = self.get_piece_at(col, row) {
-                    let code = match (piece_type, color) {
-                        (PieceType::King, Color::Red) => 1,
-                        (PieceType::Advisor, Color::Red) => 2,
-                        (PieceType::Elephant, Color::Red) => 3,
-                        (PieceType::Knight, Color::Red) => 4,
-                        (PieceType::Rook, Color::Red) => 5,
-                        (PieceType::Cannon, Color::Red) => 6,
-                        (PieceType::Pawn, Color::Red) => 7,
-                        (PieceType::King, Color::Black) => 9,
-                        (PieceType::Advisor, Color::Black) => 10,
-                        (PieceType::Elephant, Color::Black) => 11,
-                        (PieceType::Knight, Color::Black) => 12,
-                        (PieceType::Rook, Color::Black) => 13,
-                        (PieceType::Cannon, Color::Black) => 14,
-                        (PieceType::Pawn, Color::Black) => 15,
-                        _ => 0,
-                    };
-                    data[index] = code;
-                }
-            }
-        }
-
-        Ok(data)
-    }
-
-    /// Create board from XQF format byte array (90 bytes)
-    pub fn from_xqf_board(data: &[u8; 90]) -> Result<Self, String> {
-        let mut board = Board::new();
-        board.clear();
-
-        for i in 0..90 {
-            let piece_code = data[i];
-            if piece_code == 0 {
-                continue;
-            }
-
-            let (col, row) = {
-                let row = i / 9;
-                let col = i % 9;
-                (col, row)
-            };
-
-            let (piece_type, color) = match piece_code {
-                1 => (PieceType::King, Color::Red),
-                2 => (PieceType::Advisor, Color::Red),
-                3 => (PieceType::Elephant, Color::Red),
-                4 => (PieceType::Knight, Color::Red),
-                5 => (PieceType::Rook, Color::Red),
-                6 => (PieceType::Cannon, Color::Red),
-                7 => (PieceType::Pawn, Color::Red),
-                9 => (PieceType::King, Color::Black),
-                10 => (PieceType::Advisor, Color::Black),
-                11 => (PieceType::Elephant, Color::Black),
-                12 => (PieceType::Knight, Color::Black),
-                13 => (PieceType::Rook, Color::Black),
-                14 => (PieceType::Cannon, Color::Black),
-                15 => (PieceType::Pawn, Color::Black),
-                _ => return Err(format!("Invalid XQF piece code: {}", piece_code)),
-            };
-
-            board.set_piece_at(col, row, piece_type, color);
-        }
-
-        Ok(board)
     }
 }

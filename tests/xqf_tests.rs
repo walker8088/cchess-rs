@@ -1,7 +1,7 @@
 /// Tests for XQF file format support
 use cchess_rs::board::Board;
 use cchess_rs::game::Game;
-use cchess_rs::xqf::{XqfFile, XqfGameInfo, XqfHeader, XqfMove};
+use cchess_rs::xqf::{board_from_xqf, board_to_xqf, XqfFile, XqfGameInfo, XqfHeader, XqfMove};
 
 #[test]
 fn test_xqf_header_creation() {
@@ -56,7 +56,7 @@ fn test_board_xqf_conversion() {
     let board = Board::new();
 
     // Convert to XQF format
-    let xqf_data = board.to_xqf_board();
+    let xqf_data = board_to_xqf(&board);
     assert!(xqf_data.is_ok());
 
     let data = xqf_data.unwrap();
@@ -94,7 +94,7 @@ fn test_board_from_xqf() {
     data[9 * 9 + 4] = 9;
 
     // Convert from XQF
-    let board_result = Board::from_xqf_board(&data);
+    let board_result = board_from_xqf(&data);
     assert!(board_result.is_ok());
 
     let board = board_result.unwrap();
