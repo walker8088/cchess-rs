@@ -7,6 +7,8 @@ description = "Chinese Chess (Xiangqi) implementation in Rust"
 license = "MIT"
 
 [dependencies]
+byteorder = "1.5"
+chrono = "0.4"
 # serde = { version = "1.0", features = ["derive"] } # Uncomment if needed for serialization
 # anyhow = "1.0" # For error handling
 # thiserror = "1.0" # For custom errors

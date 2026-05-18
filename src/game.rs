@@ -272,4 +272,20 @@ impl Game {
             self.current_turn, self.is_game_over, self.winner
         )
     }
+
+    /// Get a reference to the board
+    pub fn get_board(&self) -> &Board {
+        &self.board
+    }
+
+    /// Create a game from an existing board
+    pub fn from_board(board: Board) -> Self {
+        Game {
+            board,
+            current_turn: Color::Red, // Default to red's turn
+            is_game_over: false,
+            winner: None,
+            move_history: Vec::new(),
+        }
+    }
 }
