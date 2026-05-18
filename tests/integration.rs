@@ -151,7 +151,7 @@ fn test_game_creation() {
     assert_eq!(game.current_turn, Color::Red);
     assert!(!game.is_game_over);
     assert!(game.winner.is_none());
-    assert!(game.move_history.is_empty());
+    assert!(game.root_moves.is_empty());
 }
 
 #[test]

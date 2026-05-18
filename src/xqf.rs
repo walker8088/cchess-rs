@@ -2,8 +2,12 @@
 //!
 //! This module provides functionality to read and write XQF files,
 //! which are binary files used to store Chinese chess game records.
+//!
+//! Supports XQF version 1.0+ including multi-branch (variation) support
+//! introduced in version 1.1 and above.
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -11,6 +15,21 @@ use std::path::Path;
 use crate::board::Board;
 use crate::game::Game;
 use crate::pieces::{Color, PieceType};
+
+// XQF format constants (from Python implementation)
+const XQF_HEADER_SIZE: usize = 0x400; // 1024 bytes
+const XQF_MOVE_FROM_OFFSET: u8 = 0x18;
+const XQF_MOVE_TO_OFFSET: u8 = 0x20;
+const XQF_STEP_FLAG_MASK: u8 = 0xE0;
+const XQF_STEP_HAS_ANNO: u8 = 0x20;
+const XQF_STEP_HAS_NEXT: u8 = 0x80;
+const XQF_STEP_HAS_VAR: u8 = 0x40;
+
+// Chess piece kinds in XQF order (16 pieces per side)
+const CHESSMAN_KINDS: &str = "RNBAKABNRCCPPPPP";
+
+// Game result mapping
+const GAME_RESULT_MAP: [&str; 5] = ["*", "1-0", "0-1", "1-0", "*"];
 
 /// XQF file header structure
 #[derive(Debug, Clone)]
@@ -63,6 +82,85 @@ pub struct XqfMove {
     pub flags: u8,
     /// Reserved bytes
     pub reserved: [u8; 2],
+}
+
+/// XQF move node for tree structure (supports variations)
+#[derive(Debug, Clone)]
+pub struct XqfMoveNode {
+    /// The move at this node
+    pub move_data: XqfMoveData,
+    /// Annotation/comment for this move
+    pub annotation: Option<String>,
+    /// Main line continuation (next move in the primary variation)
+    pub main_line: Option<Box<XqfMoveNode>>,
+    /// Alternative variations (branches)
+    pub variations: Vec<XqfMoveNode>,
+}
+
+/// Decoded move data from XQF format
+#[derive(Debug, Clone)]
+pub struct XqfMoveData {
+    /// From position (0-89)
+    pub from: u8,
+    /// To position (0-89)
+    pub to: u8,
+    /// Piece type (FEN character)
+    pub piece: Option<char>,
+}
+
+/// XQF decryption keys structure
+#[derive(Debug, Clone)]
+pub struct XqfKeys {
+    /// Position encryption factor
+    pub key_xy: u8,
+    /// Move start position encryption factor
+    pub key_xyf: u8,
+    /// Move end position encryption factor
+    pub key_xyt: u8,
+    /// Annotation size encryption factor
+    pub key_rmk_size: u16,
+    /// Key bytes for decryption
+    pub f_key_bytes: (u8, u8, u8, u8),
+    /// 32-byte key array for step decryption
+    pub f32_keys: Vec<u8>,
+}
+
+/// XQF game information (extended for multi-branch)
+#[derive(Debug, Clone)]
+pub struct XqfGameInfoExtended {
+    /// Game title
+    pub title: Option<String>,
+    /// Red player name
+    pub red_player: Option<String>,
+    /// Black player name
+    pub black_player: Option<String>,
+    /// Event/match name
+    pub event: Option<String>,
+    /// Game result ("1-0", "0-1", "1/2-1/2", "*")
+    pub result: String,
+    /// XQF version
+    pub version: u8,
+    /// Game type
+    pub game_type: u8,
+    /// Source format
+    pub source: String,
+    /// Number of branches/variations
+    pub branches: u32,
+}
+
+/// Complete XQF file with multi-branch support
+#[derive(Debug, Clone)]
+pub struct XqfFileWithVariations {
+    /// Game information
+    pub game_info: XqfGameInfoExtended,
+    /// Initial board position
+    pub initial_board: Board,
+    /// Root move node (first move of the game)
+    pub root_moves: Vec<XqfMoveNode>,
+    /// XQF version
+    pub version: u8,
+    /// Whether the file was encrypted
+    pub was_encrypted: bool,
 }
 
 /// XQF file structure
@@ -569,4 +667,600 @@ pub fn board_from_xqf(data: &[u8; 90]) -> Result<Board, XqfError> {
     }
 
     Ok(board)
+}
+
+// =============================================================================
+// XQF 1.1+ Multi-branch Support
+// =============================================================================
+
+/// Decode XQF position to (col, row) coordinates
+fn xqf_decode_pos(man_pos: u8) -> (u8, u8) {
+    (man_pos / 10, man_pos % 10)
+}
+
+/// XQFKey structure for decryption
+#[derive(Debug, Clone)]
+struct XQFKey {
+    key_xy: u8,
+    key_xyf: u8,
+    key_xyt: u8,
+    key_rmk_size: u16,
+    f_key_bytes: (u8, u8, u8, u8),
+    f32_keys: Vec<u8>,
+}
+
+/// Initialize decryption keys
+fn init_decrypt_key(buff_str: &[u8]) -> Result<XQFKey, XqfError> {
+    if buff_str.len() < 13 {
+        return Err(XqfError::Other("Key buffer too small".into()));
+    }
+
+    let head_key_mask = buff_str[0] as u32;
+    let head_key_or_a = buff_str[5];
+    let head_key_or_b = buff_str[6];
+    let head_key_or_c = buff_str[7];
+    let head_key_or_d = buff_str[8];
+    let head_keys_sum = buff_str[9];
+    let head_key_xy = buff_str[10];
+    let head_key_xyf = buff_str[11];
+    let head_key_xyt = buff_str[12];
+
+    let mut keys = XQFKey {
+        key_xy: 0,
+        key_xyf: 0,
+        key_xyt: 0,
+        key_rmk_size: 0,
+        f_key_bytes: (0, 0, 0, 0),
+        f32_keys: vec![0; 32],
+    };
+
+    // Position encryption factor
+    let b_key = head_key_xy as u32;
+    keys.key_xy = (((((((b_key * b_key) * 3 + 9) * 3 + 8) * 2 + 1) * 3 + 8) * b_key) & 0xFF) as u8;
+
+    // Move start encryption factor
+    let b_key = head_key_xyf as u32;
+    keys.key_xyf = (((((((b_key * b_key) * 3 + 9) * 3 + 8) * 2 + 1) * 3 + 8) * keys.key_xy as u32)
+        & 0xFF) as u8;
+
+    // Move end encryption factor
+    let b_key = head_key_xyt as u32;
+    keys.key_xyt = (((((((b_key * b_key) * 3 + 9) * 3 + 8) * 2 + 1) * 3 + 8) * keys.key_xyf as u32)
+        & 0xFF) as u8;
+
+    // Annotation size encryption factor
+    let w_key = (head_keys_sum as u16) * 256 + keys.key_xy as u16;
+    keys.key_rmk_size = ((w_key % 32000) + 767) & 0xFFFF;
+
+    let b1 = ((head_keys_sum as u32 & head_key_mask) | head_key_or_a as u32) as u8;
+    let b2 = ((keys.key_xy as u32 & head_key_mask) | head_key_or_b as u32) as u8;
+    let b3 = ((keys.key_xyf as u32 & head_key_mask) | head_key_or_c as u32) as u8;
+    let b4 = ((keys.key_xyt as u32 & head_key_mask) | head_key_or_d as u32) as u8;
+
+    keys.f_key_bytes = (b1, b2, b3, b4);
+
+    // Initialize F32Keys
+    let base = b"[(C) Copyright Mr. Dong Shiwei.]";
+    keys.f32_keys = base.iter().map(|&b| b).collect::<Vec<u8>>();
+    for i in 0..keys.f32_keys.len() {
+        let key_byte = match i % 4 {
+            0 => keys.f_key_bytes.0,
+            1 => keys.f_key_bytes.1,
+            2 => keys.f_key_bytes.2,
+            _ => keys.f_key_bytes.3,
+        };
+        keys.f32_keys[i] &= key_byte;
+    }
+
+    Ok(keys)
+}
+
+/// Decrypt step buffer
+fn decode_xqf_buff(keys: &XQFKey, buff: &[u8]) -> Vec<u8> {
+    let mut de_buff = buff.to_vec();
+    let n_pos: usize = 0x400;
+
+    for i in 0..buff.len() {
+        let key_byte = keys.f32_keys[(n_pos + i) % 32];
+        de_buff[i] = de_buff[i].wrapping_sub(key_byte);
+    }
+
+    de_buff
+}
+
+/// Initialize chess board from XQF man positions
+fn init_chess_board(man_str: &[u8], version: u8, keys: Option<&XQFKey>) -> [u8; 32] {
+    let mut tmp_man = [0xFFu8; 32];
+
+    if let Some(keys) = keys {
+        for i in 0..32 {
+            if version >= 12 {
+                let idx = ((keys.key_xy as usize + i + 1) & 0x1F) as usize;
+                tmp_man[idx] = man_str[i];
+            } else {
+                tmp_man[i] = man_str[i];
+            }
+        }
+
+        for i in 0..32 {
+            tmp_man[i] = tmp_man[i].wrapping_sub(keys.key_xy);
+            if tmp_man[i] > 89 {
+                tmp_man[i] = 0xFF;
+            }
+        }
+    } else {
+        for i in 0..32 {
+            if i < man_str.len() {
+                tmp_man[i] = man_str[i];
+            }
+        }
+    }
+
+    tmp_man
+}
+
+/// Buffer decoder for reading step data
+struct XQFBuffDecoder {
+    buffer: Vec<u8>,
+    index: usize,
+}
+
+impl XQFBuffDecoder {
+    fn new(buffer: Vec<u8>) -> Self {
+        XQFBuffDecoder { buffer, index: 0 }
+    }
+
+    fn read_bytes(&mut self, size: usize) -> Vec<u8> {
+        let start = self.index;
+        let stop = std::cmp::min(self.index + size, self.buffer.len());
+        self.index = stop;
+        self.buffer[start..stop].to_vec()
+    }
+
+    fn read_str(&mut self, size: usize) -> Option<String> {
+        let buff = self.read_bytes(size);
+        String::from_utf8(buff).ok()
+    }
+
+    fn read_int(&mut self) -> u32 {
+        let data = self.read_bytes(4);
+        if data.len() < 4 {
+            return 0;
+        }
+        data[0] as u32
+            + ((data[1] as u32) << 8)
+            + ((data[2] as u32) << 16)
+            + ((data[3] as u32) << 24)
+    }
+
+    fn has_data(&self) -> bool {
+        self.index < self.buffer.len()
+    }
+}
+
+/// Build initial board from chess mans
+fn build_xqf_board(chess_mans: &[u8; 32]) -> Board {
+    let mut board = Board::new();
+    let chessman_kinds = "RNBAKABNRCCPPPPP";
+    let kinds: Vec<char> = chessman_kinds.chars().collect();
+
+    for side in 0..2 {
+        for man_index in 0..16 {
+            let man_pos = chess_mans[side * 16 + man_index];
+            if man_pos == 0xFF {
+                continue;
+            }
+
+            let (col, row) = xqf_decode_pos(man_pos);
+            let fen_ch = kinds[man_index];
+
+            let (piece_type, color) = match fen_ch {
+                'R' => (
+                    PieceType::Rook,
+                    if side == 0 { Color::Red } else { Color::Black },
+                ),
+                'N' => (
+                    PieceType::Knight,
+                    if side == 0 { Color::Red } else { Color::Black },
+                ),
+                'B' => (
+                    PieceType::Advisor,
+                    if side == 0 { Color::Red } else { Color::Black },
+                ),
+                'A' => (
+                    PieceType::Advisor,
+                    if side == 0 { Color::Red } else { Color::Black },
+                ),
+                'K' => (
+                    PieceType::King,
+                    if side == 0 { Color::Red } else { Color::Black },
+                ),
+                'C' => (
+                    PieceType::Cannon,
+                    if side == 0 { Color::Red } else { Color::Black },
+                ),
+                'P' => (
+                    PieceType::Pawn,
+                    if side == 0 { Color::Red } else { Color::Black },
+                ),
+                _ => continue,
+            };
+
+            board.set_piece_at(col as usize, row as usize, piece_type, color);
+        }
+    }
+
+    board
+}
+
+/// Parse step info for low version (<= 0x0A)
+fn parse_step_info_low_version(
+    step_info: &mut [u8],
+    buff_decoder: &mut XQFBuffDecoder,
+) -> (bool, bool, u32) {
+    let has_next_step = (step_info[2] & 0xF0) != 0;
+    let has_var_step = (step_info[2] & 0x0F) != 0;
+    let annote_len = buff_decoder.read_int();
+
+    step_info[0] = step_info[0].wrapping_sub(XQF_MOVE_FROM_OFFSET);
+    step_info[1] = step_info[1].wrapping_sub(XQF_MOVE_TO_OFFSET);
+
+    (has_next_step, has_var_step, annote_len)
+}
+
+/// Parse step info for high version (> 0x0A)
+fn parse_step_info_high_version(
+    step_info: &mut [u8],
+    buff_decoder: &mut XQFBuffDecoder,
+    keys: &XQFKey,
+) -> (bool, bool, u32) {
+    step_info[2] &= XQF_STEP_FLAG_MASK;
+    let has_next_step = (step_info[2] & XQF_STEP_HAS_NEXT) != 0;
+    let has_var_step = (step_info[2] & XQF_STEP_HAS_VAR) != 0;
+    let mut annote_len = 0u32;
+
+    if (step_info[2] & XQF_STEP_HAS_ANNO) != 0 {
+        annote_len = buff_decoder
+            .read_int()
+            .wrapping_sub(keys.key_rmk_size as u32);
+    }
+
+    step_info[0] = step_info[0]
+        .wrapping_sub(XQF_MOVE_FROM_OFFSET)
+        .wrapping_sub(keys.key_xyf);
+    step_info[1] = step_info[1]
+        .wrapping_sub(XQF_MOVE_TO_OFFSET)
+        .wrapping_sub(keys.key_xyt);
+
+    (has_next_step, has_var_step, annote_len)
+}
+
+/// Recursively read steps and build move tree
+fn read_steps(
+    buff_decoder: &mut XQFBuffDecoder,
+    version: u8,
+    keys: Option<&XQFKey>,
+    board: &Board,
+    branches: &mut u32,
+) -> Option<XqfMoveNode> {
+    let step_info_bytes = buff_decoder.read_bytes(4);
+    if step_info_bytes.len() < 4 {
+        return None;
+    }
+
+    let mut step_info = step_info_bytes;
+    let board_bak = board.clone();
+
+    let (has_next_step, has_var_step, annote_len) = if version <= 0x0A {
+        parse_step_info_low_version(&mut step_info, buff_decoder)
+    } else {
+        if let Some(k) = keys {
+            parse_step_info_high_version(&mut step_info, buff_decoder, k)
+        } else {
+            return None;
+        }
+    };
+
+    let (from_col, from_row) = xqf_decode_pos(step_info[0]);
+    let (to_col, to_row) = xqf_decode_pos(step_info[1]);
+
+    let annote = if annote_len > 0 {
+        buff_decoder.read_str(annote_len as usize)
+    } else {
+        None
+    };
+
+    let from_pos = from_row as usize * 9 + from_col as usize;
+    let to_pos = to_row as usize * 9 + to_col as usize;
+
+    let move_data = XqfMoveData {
+        from: from_pos as u8,
+        to: to_pos as u8,
+        piece: None,
+    };
+
+    let mut node = XqfMoveNode {
+        move_data,
+        annotation: annote,
+        main_line: None,
+        variations: Vec::new(),
+    };
+
+    if has_next_step {
+        if let Some(next_node) = read_steps(buff_decoder, version, keys, board, branches) {
+            node.main_line = Some(Box::new(next_node));
+        }
+    }
+
+    if has_var_step {
+        if let Some(var_node) = read_steps(buff_decoder, version, keys, &board_bak, branches) {
+            node.variations.push(var_node);
+            *branches += 1;
+        }
+    }
+
+    Some(node)
+}
+
+/// Read XQF file with multi-branch support
+pub fn read_xqf_with_variations(path: &str) -> Result<XqfFileWithVariations, XqfError> {
+    let contents = std::fs::read(path).map_err(XqfError::Io)?;
+    read_xqf_from_bytes(&contents)
+}
+
+/// Read XQF from bytes with multi-branch support
+pub fn read_xqf_from_bytes(contents: &[u8]) -> Result<XqfFileWithVariations, XqfError> {
+    if contents.len() < XQF_HEADER_SIZE {
+        return Err(XqfError::Other("File too small".into()));
+    }
+
+    if &contents[0..2] != b"XQ" {
+        return Err(XqfError::InvalidSignature);
+    }
+
+    let version = contents[2];
+    let crypt_keys = contents[3..16].to_vec();
+    let uc_board = contents[16..48].to_vec();
+
+    let keys = if version > 0x0A {
+        Some(init_decrypt_key(&crypt_keys)?)
+    } else {
+        None
+    };
+
+    let chess_mans = init_chess_board(&uc_board, version, keys.as_ref());
+    let initial_board = build_xqf_board(&chess_mans);
+
+    let step_base_buff = if version > 0x0A {
+        if let Some(k) = &keys {
+            let decrypted = decode_xqf_buff(k, &contents[XQF_HEADER_SIZE..]);
+            XQFBuffDecoder::new(decrypted)
+        } else {
+            XQFBuffDecoder::new(contents[XQF_HEADER_SIZE..].to_vec())
+        }
+    } else {
+        XQFBuffDecoder::new(contents[XQF_HEADER_SIZE..].to_vec())
+    };
+
+    // Parse game info
+    let mut offset = 48;
+    let title_len = contents[offset] as usize;
+    offset += 1;
+    let title = if title_len > 0 && offset + title_len <= contents.len() {
+        String::from_utf8(contents[offset..offset + title_len].to_vec()).ok()
+    } else {
+        None
+    };
+    offset += 64 + title_len;
+
+    let red_name_len = contents[offset] as usize;
+    offset += 1;
+    let red_player = if red_name_len > 0 && offset + red_name_len <= contents.len() {
+        String::from_utf8(contents[offset..offset + red_name_len].to_vec()).ok()
+    } else {
+        None
+    };
+    offset += red_name_len + 64;
+
+    let black_name_len = contents[offset] as usize;
+    offset += 1;
+    let black_player = if black_name_len > 0 && offset + black_name_len <= contents.len() {
+        String::from_utf8(contents[offset..offset + black_name_len].to_vec()).ok()
+    } else {
+        None
+    };
+    offset += black_name_len + 64;
+
+    let uc_type = contents[offset];
+    offset += 1;
+    let uc_res = contents[offset];
+
+    let result = if uc_res <= 4 {
+        GAME_RESULT_MAP[uc_res as usize].to_string()
+    } else {
+        "*".to_string()
+    };
+
+    // Parse moves recursively
+    let mut step_decoder = step_base_buff;
+    let mut branches = 0u32;
+    let mut root_moves = Vec::new();
+    let mut current_board = initial_board.clone();
+
+    while let Some(node) = read_steps(
+        &mut step_decoder,
+        version,
+        keys.as_ref(),
+        &current_board,
+        &mut branches,
+    ) {
+        root_moves.push(node);
+    }
+
+    Ok(XqfFileWithVariations {
+        game_info: XqfGameInfoExtended {
+            title,
+            red_player,
+            black_player,
+            event: None,
+            result,
+            version,
+            game_type: uc_type,
+            source: "XQF".to_string(),
+            branches,
+        },
+        initial_board,
+        root_moves,
+        version,
+        was_encrypted: version > 0x0A,
+    })
+}
+
+/// Convert XqfFileWithVariations to Game
+pub fn xqf_file_to_game(xqf_file: &XqfFileWithVariations) -> Result<Game, XqfError> {
+    let mut game = Game::from_board(xqf_file.initial_board.clone());
+
+    game.metadata.title = xqf_file.game_info.title.clone();
+    game.metadata.red_player = xqf_file.game_info.red_player.clone();
+    game.metadata.black_player = xqf_file.game_info.black_player.clone();
+    game.metadata.result = Some(xqf_file.game_info.result.clone());
+    game.metadata.source = Some(xqf_file.game_info.source.clone());
+    game.metadata.branch_count = xqf_file.game_info.branches;
+
+    for root_move in &xqf_file.root_moves {
+        convert_move_node_to_game(root_move, &mut game, None)?;
+    }
+
+    Ok(game)
+}
+
+/// Recursively convert move nodes to game
+fn convert_move_node_to_game(
+    node: &XqfMoveNode,
+    game: &mut Game,
+    parent_ply: Option<u32>,
+) -> Result<(), XqfError> {
+    let from_col = node.move_data.from as usize % 9;
+    let from_row = node.move_data.from as usize / 9;
+    let to_col = node.move_data.to as usize % 9;
+    let to_row = node.move_data.to as usize / 9;
+
+    let from = (from_col, from_row);
+    let to = (to_col, to_row);
+
+    if let Some(ply) = parent_ply {
+        let _ = game.make_variation(ply, from, to);
+    } else {
+        let _ = game.make_move(from, to);
+    }
+
+    if let Some(ref ann) = node.annotation {
+        game.annotate_last_move(ann.clone());
+    }
+
+    if let Some(ref main) = node.main_line {
+        let current_ply = game.get_current_ply() as u32;
+        convert_move_node_to_game(main, game, Some(current_ply))?;
+    }
+
+    for var in &node.variations {
+        let current_ply = game.get_current_ply() as u32;
+        convert_move_node_to_game(var, game, Some(current_ply))?;
+    }
+
+    Ok(())
+}
+
+/// Write XQF file from game
+pub fn write_xqf_from_game(_game: &Game, _path: &str) -> Result<(), XqfError> {
+    Err(XqfError::Unsupported)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_xqf_with_variations() {
+        let result = read_xqf_with_variations("tests/data/game_varations.xqf");
+        assert!(
+            result.is_ok(),
+            "Failed to read XQF file: {:?}",
+            result.err()
+        );
+
+        let xqf_file = result.unwrap();
+
+        // Verify game info
+        println!("XQF Version: {}", xqf_file.version);
+        println!("Was encrypted: {}", xqf_file.was_encrypted);
+        println!("Title: {:?}", xqf_file.game_info.title);
+        println!("Red player: {:?}", xqf_file.game_info.red_player);
+        println!("Black player: {:?}", xqf_file.game_info.black_player);
+        println!("Result: {}", xqf_file.game_info.result);
+        println!("Branches: {}", xqf_file.game_info.branches);
+        println!("Root moves count: {}", xqf_file.root_moves.len());
+
+        // Verify we have moves
+        assert!(
+            !xqf_file.root_moves.is_empty(),
+            "No moves found in XQF file"
+        );
+
+        // Verify branches count
+        assert!(
+            xqf_file.game_info.branches > 0,
+            "Expected variations but found none"
+        );
+
+        // Print move tree
+        print_move_tree(&xqf_file.root_moves, 0);
+    }
+
+    #[test]
+    fn test_xqf_to_game() {
+        let xqf_file = read_xqf_with_variations("tests/data/game_varations.xqf").unwrap();
+        let game = xqf_file_to_game(&xqf_file);
+
+        assert!(
+            game.is_ok(),
+            "Failed to convert XQF to game: {:?}",
+            game.err()
+        );
+
+        let game = game.unwrap();
+        println!("Game metadata:");
+        println!("  Title: {:?}", game.metadata.title);
+        println!("  Red: {:?}", game.metadata.red_player);
+        println!("  Black: {:?}", game.metadata.black_player);
+        println!("  Result: {:?}", game.metadata.result);
+        println!("  Branch count: {}", game.metadata.branch_count);
+        println!("  Total moves: {}", game.total_moves());
+        println!("  Total variations: {}", game.total_variations());
+    }
+
+    fn print_move_tree(moves: &[XqfMoveNode], depth: usize) {
+        let indent = "  ".repeat(depth);
+        for (i, node) in moves.iter().enumerate() {
+            if depth == 0 {
+                println!("\n{}=== Root Move {} ===", indent, i + 1);
+            }
+
+            println!(
+                "{}Move: {} -> {} (annotation: {:?})",
+                indent, node.move_data.from, node.move_data.to, node.annotation
+            );
+
+            // Print variations
+            for (j, var) in node.variations.iter().enumerate() {
+                println!("{}  Variation {}:", indent, j + 1);
+                print_move_tree(&[var.clone()], depth + 1);
+            }
+
+            // Print main line
+            if let Some(ref main) = node.main_line {
+                print_move_tree(&[main.as_ref().clone()], depth + 1);
+            }
+        }
+    }
 }
