@@ -1,0 +1,15 @@
+[package]
+name = "cchess-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name"]
+description = "Chinese Chess (Xiangqi) implementation in Rust"
+license = "MIT"
+
+[dependencies]
+# serde = { version = "1.0", features = ["derive"] } # Uncomment if needed for serialization
+# anyhow = "1.0" # For error handling
+# thiserror = "1.0" # For custom errors
+
+[dev-dependencies]
+# criterion = "0.5" # For benchmarking
