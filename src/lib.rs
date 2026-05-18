@@ -1,4 +1,5 @@
 /// cchess-rs: A Chinese Chess (Xiangqi) implementation in Rust
+pub mod attack_matrix;
 pub mod board;
 pub mod game;
 pub mod move_gen;
