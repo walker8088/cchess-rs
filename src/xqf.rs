@@ -7,7 +7,6 @@
 //! introduced in version 1.1 and above.
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -26,6 +25,7 @@ const XQF_STEP_HAS_NEXT: u8 = 0x80;
 const XQF_STEP_HAS_VAR: u8 = 0x40;
 
 // Chess piece kinds in XQF order (16 pieces per side)
+#[allow(dead_code)]
 const CHESSMAN_KINDS: &str = "RNBAKABNRCCPPPPP";
 
 // Game result mapping
@@ -212,6 +212,12 @@ impl From<io::Error> for XqfError {
     }
 }
 
+impl Default for XqfHeader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl XqfHeader {
     /// Create a new XQF header
     pub fn new() -> Self {
@@ -262,6 +268,12 @@ impl XqfHeader {
         writer.write_all(&self.reserved)?;
 
         Ok(())
+    }
+}
+
+impl Default for XqfGameInfo {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -833,6 +845,7 @@ impl XQFBuffDecoder {
             + ((data[3] as u32) << 24)
     }
 
+    #[allow(dead_code)]
     fn has_data(&self) -> bool {
         self.index < self.buffer.len()
     }
@@ -1085,7 +1098,7 @@ pub fn read_xqf_from_bytes(contents: &[u8]) -> Result<XqfFileWithVariations, Xqf
     let mut step_decoder = step_base_buff;
     let mut branches = 0u32;
     let mut root_moves = Vec::new();
-    let mut current_board = initial_board.clone();
+    let current_board = initial_board.clone();
 
     while let Some(node) = read_steps(
         &mut step_decoder,

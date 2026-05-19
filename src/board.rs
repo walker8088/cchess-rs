@@ -1,4 +1,5 @@
 /// Board module for Chinese Chess
+use crate::move_notation::{ChineseLocale, MoveFormat, MoveNotation};
 use crate::pieces::{Color, PieceType};
 
 /// Represents the game board
@@ -80,7 +81,7 @@ impl Board {
                     return Err(format!("Row {} too long in FEN: {}", row_idx + 1, row_str));
                 }
 
-                if c.is_digit(10) {
+                if c.is_ascii_digit() {
                     // Digit represents empty squares
                     let empty_count = c.to_digit(10).unwrap() as usize;
                     for _ in 0..empty_count {
@@ -188,7 +189,7 @@ impl Board {
             }
 
             // 检查是否为炮的特殊吃子规则（需要炮架）
-            let is_cannon = moving_piece.to_ascii_lowercase() == 'c';
+            let is_cannon = moving_piece.eq_ignore_ascii_case(&'c');
             if is_cannon {
                 // 炮的吃子需要中间有一个炮架
                 if !self.has_cannon_screen(from_col, from_row, to_col, to_row) {
@@ -198,7 +199,7 @@ impl Board {
         } else {
             // 目标位置为空
             // 如果是炮，移动到空位置时不能有炮架
-            let is_cannon = moving_piece.to_ascii_lowercase() == 'c';
+            let is_cannon = moving_piece.eq_ignore_ascii_case(&'c');
             if is_cannon {
                 // 炮移动时空位不能有炮架
                 if self.has_pieces_between(from_col, from_row, to_col, to_row) {
@@ -338,9 +339,9 @@ impl Board {
     pub fn copy(&self) -> Board {
         let mut squares = [['.'; 9]; 10];
 
-        for row in 0..10 {
-            for col in 0..9 {
-                squares[row][col] = self.squares[row][col];
+        for (row, row_squares) in squares.iter_mut().enumerate().take(10) {
+            for (col, square) in row_squares.iter_mut().enumerate().take(9) {
+                *square = self.squares[row][col];
             }
         }
 
@@ -428,7 +429,7 @@ impl Board {
     /// Check if a position is in the palace (九宫)
     pub fn is_in_palace(col: usize, row: usize, is_red: bool) -> bool {
         // Palace columns: 3, 4, 5 (0-indexed)
-        if col < 3 || col > 5 {
+        if !(3..=5).contains(&col) {
             return false;
         }
 
@@ -461,8 +462,8 @@ impl Board {
 
     /// Get Manhattan distance between two positions
     pub fn manhattan_distance(col1: usize, row1: usize, col2: usize, row2: usize) -> usize {
-        let dx = (col2 as isize - col1 as isize).abs() as usize;
-        let dy = (row2 as isize - row1 as isize).abs() as usize;
+        let dx = (col2 as isize - col1 as isize).unsigned_abs();
+        let dy = (row2 as isize - row1 as isize).unsigned_abs();
         dx + dy
     }
 
@@ -492,5 +493,222 @@ impl Board {
     /// Remove piece at position (通用方法)
     pub fn remove_piece_at(&mut self, col: usize, row: usize) {
         self.set_fen(col, row, '.');
+    }
+
+    /// 生成走法文本表示
+    ///
+    /// # 参数
+    /// - `from`: 起始位置 (列, 行)
+    /// - `to`: 目标位置 (列, 行)
+    /// - `format`: 走法格式
+    /// - `traditional`: 是否使用繁体中文（仅当format为Chinese时有效）
+    ///
+    /// # 返回值
+    /// - `Ok(String)`: 走法文本
+    /// - `Err(String)`: 错误信息
+    pub fn move_text(
+        &self,
+        from: (usize, usize),
+        to: (usize, usize),
+        format: MoveFormat,
+        traditional: bool,
+    ) -> Result<String, String> {
+        // 创建走法中间表示
+        let notation = MoveNotation::from_board_move(self, from, to)?;
+
+        // 根据格式生成文本
+        match format {
+            MoveFormat::Chinese => {
+                let locale = if traditional {
+                    ChineseLocale::Traditional
+                } else {
+                    ChineseLocale::Simplified
+                };
+                Ok(notation.to_chinese(locale))
+            }
+            MoveFormat::Compact => Ok(notation.to_compact()),
+            MoveFormat::ICCS => Ok(notation.to_iccs(from, to)),
+        }
+    }
+
+    /// 获取走法中间表示
+    pub fn move_notation(
+        &self,
+        from: (usize, usize),
+        to: (usize, usize),
+    ) -> Result<MoveNotation, String> {
+        MoveNotation::from_board_move(self, from, to)
+    }
+
+    /// 翻转棋盘视角（用于测试）
+    pub fn flip_perspective(&self) -> Board {
+        let mut flipped = Board::new();
+        flipped.clear();
+
+        for row in 0..10 {
+            for col in 0..9 {
+                let flipped_col = 8 - col;
+                let flipped_row = 9 - row;
+                flipped.squares[flipped_row][flipped_col] = self.squares[row][col];
+            }
+        }
+
+        flipped
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::move_notation::{Direction, MoveFormat};
+
+    #[test]
+    fn test_move_text_chinese() {
+        let board = Board::new();
+
+        // 测试红方车九进一（简体中文）
+        let result = board.move_text((0, 0), (0, 1), MoveFormat::Chinese, false);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("红方车九进一（简体）: {}", text);
+        assert_eq!(text, "车九进一");
+
+        // 测试红方车九进一（繁体中文）
+        let result = board.move_text((0, 0), (0, 1), MoveFormat::Chinese, true);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("红方车九进一（繁体）: {}", text);
+        assert_eq!(text, "車九進一");
+
+        // 测试红方炮二平五
+        let result = board.move_text((7, 2), (4, 2), MoveFormat::Chinese, false);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("红方炮二平五: {}", text);
+        assert_eq!(text, "炮二平五");
+
+        // 测试红方炮二平五（繁体）
+        let result = board.move_text((7, 2), (4, 2), MoveFormat::Chinese, true);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("红方炮二平五（繁体）: {}", text);
+        assert_eq!(text, "砲二平五");
+    }
+
+    #[test]
+    fn test_move_text_black() {
+        let board = Board::new();
+
+        // 测试黑方车9进1（注意：黑方使用全角数字）
+        let result = board.move_text((0, 9), (0, 8), MoveFormat::Chinese, false);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("黑方车9进1: {}", text);
+        // 注意：黑方数字应该是全角的，翻转后车是一路
+        assert_eq!(text, "车９进１");
+
+        // 测试黑方炮２平５
+        let result = board.move_text((7, 7), (4, 7), MoveFormat::Chinese, false);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("黑方炮２平５: {}", text);
+        assert_eq!(text, "炮２平５");
+    }
+
+    #[test]
+    fn test_move_text_compact() {
+        let board = Board::new();
+
+        // 测试紧凑格式：红方车九进一
+        let result = board.move_text((0, 0), (0, 1), MoveFormat::Compact, false);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("紧凑格式（红车）: {}", text);
+        assert_eq!(text, "R9+1");
+
+        // 测试紧凑格式：黑方车9进1
+        let result = board.move_text((0, 9), (0, 8), MoveFormat::Compact, false);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("紧凑格式（黑车）: {}", text);
+        assert_eq!(text, "r9+1");
+
+        // 测试紧凑格式：红方炮二平五
+        let result = board.move_text((7, 2), (4, 2), MoveFormat::Compact, false);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("紧凑格式（红炮）: {}", text);
+        assert_eq!(text, "C2=5");
+    }
+
+    #[test]
+    fn test_move_text_iccs() {
+        let board = Board::new();
+
+        // 测试ICCS格式（车九进一）
+        let result = board.move_text((0, 0), (0, 1), MoveFormat::ICCS, false);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("ICCS格式: {}", text);
+        assert_eq!(text, "a0a1");
+
+        // 测试ICCS格式（炮二进一）
+        let result = board.move_text((7, 2), (7, 3), MoveFormat::ICCS, false);
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        println!("ICCS格式: {}", text);
+        assert_eq!(text, "h2h3");
+    }
+
+    #[test]
+    fn test_move_text_invalid() {
+        let board = Board::new();
+
+        // 测试无效坐标
+        let result = board.move_text((10, 10), (0, 0), MoveFormat::Chinese, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("超出棋盘范围"));
+
+        // 测试空位置
+        let result = board.move_text((4, 4), (4, 5), MoveFormat::Chinese, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("没有棋子"));
+    }
+
+    #[test]
+    fn test_move_notation_method() {
+        let board = Board::new();
+
+        // 测试move_notation方法
+        let result = board.move_notation((0, 0), (0, 1));
+        assert!(result.is_ok());
+        let notation = result.unwrap();
+
+        assert_eq!(notation.piece_type, PieceType::Rook);
+        assert_eq!(notation.piece_color, Color::Red);
+        assert_eq!(notation.column, 9);
+        assert_eq!(notation.direction, Direction::Forward);
+        assert_eq!(notation.distance, 1);
+    }
+
+    #[test]
+    fn test_flip_perspective() {
+        let board = Board::new();
+
+        // 测试棋盘翻转
+        let flipped = board.flip_perspective();
+
+        // 检查一些关键位置
+        // 红方右下角的车应该翻转到黑方左上角
+        assert_eq!(board.get_fen(0, 0), 'r'); // 红方车
+        assert_eq!(flipped.get_fen(8, 9), 'r'); // 翻转后
+
+        // 黑方左上角的车应该翻转到红方右下角
+        assert_eq!(board.get_fen(0, 9), 'R'); // 黑方车
+        assert_eq!(flipped.get_fen(8, 0), 'R'); // 翻转后
+
+        // 中心位置测试
+        assert_eq!(board.get_fen(4, 4), '.'); // 中心空位
+        assert_eq!(flipped.get_fen(4, 5), '.'); // 翻转后中心空位
     }
 }

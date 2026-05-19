@@ -1,5 +1,4 @@
-/// Pieces module for Chinese Chess
-
+//! Pieces module for Chinese Chess
 /// Piece types in Chinese Chess
 /// Using international chess notation for compatibility
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +42,7 @@ impl Color {
     /// Get color from FEN character
     pub fn from_fen(fen_char: char) -> Option<Color> {
         // First check if it's a valid FEN character
-        if !PieceType::from_fen(fen_char).is_some() && fen_char != '.' {
+        if PieceType::from_fen(fen_char).is_none() && fen_char != '.' {
             return None;
         }
 

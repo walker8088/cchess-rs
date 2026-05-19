@@ -138,7 +138,7 @@ impl MoveNode {
 
         // Simplified Chinese notation
         let col_names = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
-        let row_names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+        let _row_names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
 
         let from_name = if is_red {
             col_names[8 - from_col]
@@ -177,6 +177,12 @@ impl MoveNode {
         };
 
         format!("{}{}{}{}", from_name, direction, distance, to_name)
+    }
+}
+
+impl Default for Game {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -238,7 +244,7 @@ impl Game {
                     current = current.main_line.as_mut().unwrap();
                 }
                 current.main_line = Some(Box::new(new_node));
-                self.current_node = current.main_line.as_deref().map(|n| n.clone());
+                self.current_node = current.main_line.as_deref().cloned();
             }
 
             // Update game state
@@ -297,7 +303,7 @@ impl Game {
             to,
             uci_notation,
             new_board,
-            if parent_ply % 2 == 0 {
+            if parent_ply.is_multiple_of(2) {
                 Color::Red
             } else {
                 Color::Black
@@ -313,6 +319,7 @@ impl Game {
     }
 
     /// Find a node by its ply number in the main line
+    #[allow(dead_code)]
     fn find_node_by_ply(&mut self, ply: u32) -> Option<&mut MoveNode> {
         if ply == 0 && self.root_moves.is_empty() {
             return None;
@@ -332,7 +339,7 @@ impl Game {
     }
 
     /// Helper to find node in a line
-    fn find_in_line<'a>(node: &'a mut MoveNode, target_ply: u32) -> Option<&'a mut MoveNode> {
+    fn find_in_line(node: &mut MoveNode, target_ply: u32) -> Option<&mut MoveNode> {
         if node.move_number == target_ply {
             return Some(node);
         }
@@ -393,7 +400,7 @@ impl Game {
         let target_board = self.get_board_at_ply(ply);
         if let Some(board) = target_board {
             self.board = board;
-            self.current_turn = if ply % 2 == 0 {
+            self.current_turn = if ply.is_multiple_of(2) {
                 Color::Red
             } else {
                 Color::Black
@@ -422,7 +429,7 @@ impl Game {
         let indent = "  ".repeat(depth);
 
         let move_num = if node.move_number % 2 == 1 {
-            format!("{}. ", (node.move_number + 1) / 2)
+            format!("{}. ", node.move_number.div_ceil(2))
         } else {
             format!("{}... ", node.move_number / 2)
         };
@@ -475,7 +482,6 @@ impl Game {
         // Add moves
         let moves = self.get_main_line();
         let mut move_text = String::new();
-        let mut ply = 0u32;
 
         for node in &moves {
             if node.move_number % 2 == 0 {
@@ -495,8 +501,6 @@ impl Game {
             if let Some(ref ann) = node.annotation {
                 move_text.push_str(&format!(" {{{}}}", ann));
             }
-
-            ply = node.move_number;
         }
 
         // Add result
@@ -630,7 +634,7 @@ impl Game {
     }
 
     /// Helper to add variation in a line
-    fn add_var_in_line<'a>(node: &'a mut MoveNode, target_ply: u32, variation: MoveNode) {
+    fn add_var_in_line(node: &mut MoveNode, target_ply: u32, variation: MoveNode) {
         if node.move_number == target_ply {
             node.variations.push(variation);
             return;

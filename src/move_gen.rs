@@ -61,7 +61,7 @@ pub fn generate_moves(board: &Board, color: Color) -> Vec<Move> {
 }
 
 /// Generate moves for a specific piece
-fn generate_piece_moves(
+pub fn generate_piece_moves(
     board: &Board,
     piece_type: PieceType,
     color: Color,
@@ -89,19 +89,12 @@ fn generate_king_moves(board: &Board, color: Color, col: usize, row: usize) -> V
         let new_row = row as isize + dr;
 
         // General must stay within the palace
-        if new_col >= 3 && new_col <= 5 {
-            if color == Color::Red && new_row >= 0 && new_row <= 2 {
-                if let Some(m) =
-                    try_move(board, color, col, row, new_col as usize, new_row as usize)
-                {
-                    moves.push(m);
-                }
-            } else if color == Color::Black && new_row >= 7 && new_row <= 9 {
-                if let Some(m) =
-                    try_move(board, color, col, row, new_col as usize, new_row as usize)
-                {
-                    moves.push(m);
-                }
+        if (3..=5).contains(&new_col)
+            && ((color == Color::Red && (0..=2).contains(&new_row))
+                || (color == Color::Black && (7..=9).contains(&new_row)))
+        {
+            if let Some(m) = try_move(board, color, col, row, new_col as usize, new_row as usize) {
+                moves.push(m);
             }
         }
     }
@@ -119,19 +112,12 @@ fn generate_advisor_moves(board: &Board, color: Color, col: usize, row: usize) -
         let new_row = row as isize + dr;
 
         // Advisor must stay within the palace
-        if new_col >= 3 && new_col <= 5 {
-            if color == Color::Red && new_row >= 0 && new_row <= 2 {
-                if let Some(m) =
-                    try_move(board, color, col, row, new_col as usize, new_row as usize)
-                {
-                    moves.push(m);
-                }
-            } else if color == Color::Black && new_row >= 7 && new_row <= 9 {
-                if let Some(m) =
-                    try_move(board, color, col, row, new_col as usize, new_row as usize)
-                {
-                    moves.push(m);
-                }
+        if (3..=5).contains(&new_col)
+            && ((color == Color::Red && (0..=2).contains(&new_row))
+                || (color == Color::Black && (7..=9).contains(&new_row)))
+        {
+            if let Some(m) = try_move(board, color, col, row, new_col as usize, new_row as usize) {
+                moves.push(m);
             }
         }
     }
@@ -155,7 +141,7 @@ fn generate_elephant_moves(board: &Board, color: Color, col: usize, row: usize) 
 
         // Elephant cannot cross the river
         // Red elephant: rows 0-4, Black elephant: rows 5-9
-        if new_col >= 0 && new_col <= 8 && new_row >= 0 && new_row <= 9 {
+        if (0..=8).contains(&new_col) && (0..=9).contains(&new_row) {
             if color == Color::Red && new_row <= 4 {
                 // Check if the blocking point is empty
                 if board.is_empty_at(block_col as usize, block_row as usize) {
@@ -165,13 +151,14 @@ fn generate_elephant_moves(board: &Board, color: Color, col: usize, row: usize) 
                         moves.push(m);
                     }
                 }
-            } else if color == Color::Black && new_row >= 5 {
-                if board.is_empty_at(block_col as usize, block_row as usize) {
-                    if let Some(m) =
-                        try_move(board, color, col, row, new_col as usize, new_row as usize)
-                    {
-                        moves.push(m);
-                    }
+            } else if color == Color::Black
+                && new_row >= 5
+                && board.is_empty_at(block_col as usize, block_row as usize)
+            {
+                if let Some(m) =
+                    try_move(board, color, col, row, new_col as usize, new_row as usize)
+                {
+                    moves.push(m);
                 }
             }
         }
@@ -202,7 +189,7 @@ fn generate_knight_moves(board: &Board, color: Color, col: usize, row: usize) ->
         let block_col = col as isize + bc;
         let block_row = row as isize + br;
 
-        if new_col >= 0 && new_col <= 8 && new_row >= 0 && new_row <= 9 {
+        if (0..=8).contains(&new_col) && (0..=9).contains(&new_row) {
             // Check if the blocking point is empty
             if board.is_empty_at(block_col as usize, block_row as usize) {
                 if let Some(m) =
@@ -226,7 +213,7 @@ fn generate_rook_moves(board: &Board, color: Color, col: usize, row: usize) -> V
         let mut new_col = col as isize + dc;
         let mut new_row = row as isize + dr;
 
-        while new_col >= 0 && new_col <= 8 && new_row >= 0 && new_row <= 9 {
+        while (0..=8).contains(&new_col) && (0..=9).contains(&new_row) {
             if let Some(m) = try_move(board, color, col, row, new_col as usize, new_row as usize) {
                 let is_capture = m.captured.is_some();
                 moves.push(m);
@@ -254,7 +241,7 @@ fn generate_cannon_moves(board: &Board, color: Color, col: usize, row: usize) ->
         let mut new_row = row as isize + dr;
         let mut jumped = false;
 
-        while new_col >= 0 && new_col <= 8 && new_row >= 0 && new_row <= 9 {
+        while (0..=8).contains(&new_col) && (0..=9).contains(&new_row) {
             if !jumped {
                 if board.has_piece_at(new_col as usize, new_row as usize) {
                     // Found a piece to jump over
@@ -306,7 +293,7 @@ fn generate_pawn_moves(board: &Board, color: Color, col: usize, row: usize) -> V
     // Forward move
     let new_col = col as isize;
     let new_row = row as isize + forward;
-    if new_row >= 0 && new_row <= 9 {
+    if (0..=9).contains(&new_row) {
         if let Some(m) = try_move(board, color, col, row, new_col as usize, new_row as usize) {
             moves.push(m);
         }
@@ -317,7 +304,7 @@ fn generate_pawn_moves(board: &Board, color: Color, col: usize, row: usize) -> V
         for dc in [-1, 1].iter() {
             let new_col = col as isize + dc;
             let new_row = row as isize;
-            if new_col >= 0 && new_col <= 8 {
+            if (0..=8).contains(&new_col) {
                 if let Some(m) =
                     try_move(board, color, col, row, new_col as usize, new_row as usize)
                 {
@@ -331,7 +318,7 @@ fn generate_pawn_moves(board: &Board, color: Color, col: usize, row: usize) -> V
 }
 
 /// Try to make a move, returns Some(Move) if valid, None otherwise
-fn try_move(
+pub fn try_move(
     board: &Board,
     color: Color,
     from_col: usize,
