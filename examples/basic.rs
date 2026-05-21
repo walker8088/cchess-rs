@@ -6,7 +6,7 @@ fn main() {
     println!("=== Chinese Chess (Xiangqi) Example ===");
 
     // Create a new game
-    let mut game = Game::new();
+    let game = Game::new();
     println!("Game created!");
     println!("{}", game.display());
 

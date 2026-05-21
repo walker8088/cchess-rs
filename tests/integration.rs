@@ -3,21 +3,21 @@
 use cchess_rs::board::Board;
 use cchess_rs::game::Game;
 use cchess_rs::move_gen::generate_moves;
-use cchess_rs::pieces::{Color, PieceType};
+use cchess_rs::pieces::{PieceType, Side};
 
 #[test]
-fn test_color_opposite() {
-    assert_eq!(Color::Red.opposite(), Color::Black);
-    assert_eq!(Color::Black.opposite(), Color::Red);
+fn test_side_opposite() {
+    assert_eq!(Side::Black.opposite(), Side::Red);
+    assert_eq!(Side::Red.opposite(), Side::Black);
 }
 
 #[test]
-fn test_color_from_fen() {
-    assert_eq!(Color::from_fen('k'), Some(Color::Red));
-    assert_eq!(Color::from_fen('K'), Some(Color::Black));
-    assert_eq!(Color::from_fen('.'), None);
-    assert_eq!(Color::from_fen('r'), Some(Color::Red));
-    assert_eq!(Color::from_fen('R'), Some(Color::Black));
+fn test_side_from_fen() {
+    assert_eq!(Side::from_fen('k'), Some(Side::Black));
+    assert_eq!(Side::from_fen('K'), Some(Side::Red));
+    assert_eq!(Side::from_fen('.'), None);
+    assert_eq!(Side::from_fen('r'), Some(Side::Black));
+    assert_eq!(Side::from_fen('R'), Some(Side::Red));
 }
 
 #[test]
@@ -35,7 +35,8 @@ fn test_piece_type_from_fen() {
 
 #[test]
 fn test_board_creation() {
-    let board = Board::new();
+    let mut board = Board::new();
+    board.initial_position();
 
     // Check that board is not empty
     assert!(!board.is_empty());
@@ -50,7 +51,8 @@ fn test_board_creation() {
 
 #[test]
 fn test_board_to_fen() {
-    let board = Board::new();
+    let mut board = Board::new();
+    board.initial_position();
     let fen = board.to_fen();
 
     // Standard starting FEN for Chinese Chess
@@ -91,6 +93,7 @@ fn test_board_clear() {
 #[test]
 fn test_board_make_move() {
     let mut board = Board::new();
+    board.initial_position();
 
     // Test a valid move: red pawn at (0,3) moves forward to (0,4)
     let from = (0, 3);
@@ -127,7 +130,8 @@ fn test_board_helper_functions() {
 
 #[test]
 fn test_board_methods() {
-    let board = Board::new();
+    let mut board = Board::new();
+    board.initial_position();
 
     // Test get_all_piece_positions
     let positions = board.get_all_piece_positions();
@@ -148,7 +152,7 @@ fn test_board_methods() {
 fn test_game_creation() {
     let game = Game::new();
 
-    assert_eq!(game.current_turn, Color::Red);
+    assert_eq!(game.current_turn, Side::Red);
     assert!(!game.is_game_over);
     assert!(game.winner.is_none());
     assert!(game.root_moves.is_empty());
@@ -156,13 +160,14 @@ fn test_game_creation() {
 
 #[test]
 fn test_move_generation() {
-    let board = Board::new();
+    let mut board = Board::new();
+    board.initial_position();
 
-    // Generate moves for red
-    let red_moves = generate_moves(&board, Color::Red);
+    // Generate moves for lowercase side
+    let red_moves = generate_moves(&board, Side::Black);
     assert!(!red_moves.is_empty());
 
-    // Generate moves for black
-    let black_moves = generate_moves(&board, Color::Black);
+    // Generate moves for uppercase side
+    let black_moves = generate_moves(&board, Side::Red);
     assert!(!black_moves.is_empty());
 }

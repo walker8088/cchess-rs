@@ -13,7 +13,7 @@ use std::path::Path;
 
 use crate::board::Board;
 use crate::game::Game;
-use crate::pieces::{Color, PieceType};
+use crate::pieces::{PieceType, Side};
 
 // XQF format constants (from Python implementation)
 const XQF_HEADER_SIZE: usize = 0x400; // 1024 bytes
@@ -614,22 +614,22 @@ pub fn board_to_xqf(board: &Board) -> Result<[u8; 90], XqfError> {
         for col in 0..9 {
             let index = row * 9 + col;
 
-            if let Some((piece_type, color)) = board.get_piece_at(col, row) {
-                let code = match (piece_type, color) {
-                    (PieceType::King, Color::Red) => 1,
-                    (PieceType::Advisor, Color::Red) => 2,
-                    (PieceType::Elephant, Color::Red) => 3,
-                    (PieceType::Knight, Color::Red) => 4,
-                    (PieceType::Rook, Color::Red) => 5,
-                    (PieceType::Cannon, Color::Red) => 6,
-                    (PieceType::Pawn, Color::Red) => 7,
-                    (PieceType::King, Color::Black) => 9,
-                    (PieceType::Advisor, Color::Black) => 10,
-                    (PieceType::Elephant, Color::Black) => 11,
-                    (PieceType::Knight, Color::Black) => 12,
-                    (PieceType::Rook, Color::Black) => 13,
-                    (PieceType::Cannon, Color::Black) => 14,
-                    (PieceType::Pawn, Color::Black) => 15,
+            if let Some((piece_type, side)) = board.get_piece_at(col, row) {
+                let code = match (piece_type, side) {
+                    (PieceType::King, Side::Black) => 1,
+                    (PieceType::Advisor, Side::Black) => 2,
+                    (PieceType::Elephant, Side::Black) => 3,
+                    (PieceType::Knight, Side::Black) => 4,
+                    (PieceType::Rook, Side::Black) => 5,
+                    (PieceType::Cannon, Side::Black) => 6,
+                    (PieceType::Pawn, Side::Black) => 7,
+                    (PieceType::King, Side::Red) => 9,
+                    (PieceType::Advisor, Side::Red) => 10,
+                    (PieceType::Elephant, Side::Red) => 11,
+                    (PieceType::Knight, Side::Red) => 12,
+                    (PieceType::Rook, Side::Red) => 13,
+                    (PieceType::Cannon, Side::Red) => 14,
+                    (PieceType::Pawn, Side::Red) => 15,
                     _ => 0,
                 };
                 data[index] = code;
@@ -657,25 +657,25 @@ pub fn board_from_xqf(data: &[u8; 90]) -> Result<Board, XqfError> {
             (col, row)
         };
 
-        let (piece_type, color) = match piece_code {
-            1 => (PieceType::King, Color::Red),
-            2 => (PieceType::Advisor, Color::Red),
-            3 => (PieceType::Elephant, Color::Red),
-            4 => (PieceType::Knight, Color::Red),
-            5 => (PieceType::Rook, Color::Red),
-            6 => (PieceType::Cannon, Color::Red),
-            7 => (PieceType::Pawn, Color::Red),
-            9 => (PieceType::King, Color::Black),
-            10 => (PieceType::Advisor, Color::Black),
-            11 => (PieceType::Elephant, Color::Black),
-            12 => (PieceType::Knight, Color::Black),
-            13 => (PieceType::Rook, Color::Black),
-            14 => (PieceType::Cannon, Color::Black),
-            15 => (PieceType::Pawn, Color::Black),
+        let (piece_type, side) = match piece_code {
+            1 => (PieceType::King, Side::Black),
+            2 => (PieceType::Advisor, Side::Black),
+            3 => (PieceType::Elephant, Side::Black),
+            4 => (PieceType::Knight, Side::Black),
+            5 => (PieceType::Rook, Side::Black),
+            6 => (PieceType::Cannon, Side::Black),
+            7 => (PieceType::Pawn, Side::Black),
+            9 => (PieceType::King, Side::Red),
+            10 => (PieceType::Advisor, Side::Red),
+            11 => (PieceType::Elephant, Side::Red),
+            12 => (PieceType::Knight, Side::Red),
+            13 => (PieceType::Rook, Side::Red),
+            14 => (PieceType::Cannon, Side::Red),
+            15 => (PieceType::Pawn, Side::Red),
             _ => return Err(XqfError::InvalidMoveData),
         };
 
-        board.set_piece_at(col, row, piece_type, color);
+        board.set_piece_at(col, row, piece_type, side);
     }
 
     Ok(board)
@@ -857,9 +857,9 @@ fn build_xqf_board(chess_mans: &[u8; 32]) -> Board {
     let chessman_kinds = "RNBAKABNRCCPPPPP";
     let kinds: Vec<char> = chessman_kinds.chars().collect();
 
-    for side in 0..2 {
+    for side_idx in 0..2 {
         for man_index in 0..16 {
-            let man_pos = chess_mans[side * 16 + man_index];
+            let man_pos = chess_mans[side_idx * 16 + man_index];
             if man_pos == 0xFF {
                 continue;
             }
@@ -867,39 +867,68 @@ fn build_xqf_board(chess_mans: &[u8; 32]) -> Board {
             let (col, row) = xqf_decode_pos(man_pos);
             let fen_ch = kinds[man_index];
 
-            let (piece_type, color) = match fen_ch {
+            let piece_side = match fen_ch {
                 'R' => (
                     PieceType::Rook,
-                    if side == 0 { Color::Red } else { Color::Black },
+                    if side_idx == 0 {
+                        Side::Black
+                    } else {
+                        Side::Red
+                    },
                 ),
                 'N' => (
                     PieceType::Knight,
-                    if side == 0 { Color::Red } else { Color::Black },
+                    if side_idx == 0 {
+                        Side::Black
+                    } else {
+                        Side::Red
+                    },
                 ),
                 'B' => (
                     PieceType::Advisor,
-                    if side == 0 { Color::Red } else { Color::Black },
+                    if side_idx == 0 {
+                        Side::Black
+                    } else {
+                        Side::Red
+                    },
                 ),
                 'A' => (
                     PieceType::Advisor,
-                    if side == 0 { Color::Red } else { Color::Black },
+                    if side_idx == 0 {
+                        Side::Black
+                    } else {
+                        Side::Red
+                    },
                 ),
                 'K' => (
                     PieceType::King,
-                    if side == 0 { Color::Red } else { Color::Black },
+                    if side_idx == 0 {
+                        Side::Black
+                    } else {
+                        Side::Red
+                    },
                 ),
                 'C' => (
                     PieceType::Cannon,
-                    if side == 0 { Color::Red } else { Color::Black },
+                    if side_idx == 0 {
+                        Side::Black
+                    } else {
+                        Side::Red
+                    },
                 ),
                 'P' => (
                     PieceType::Pawn,
-                    if side == 0 { Color::Red } else { Color::Black },
+                    if side_idx == 0 {
+                        Side::Black
+                    } else {
+                        Side::Red
+                    },
                 ),
                 _ => continue,
             };
+            let (piece_type, piece_side) = piece_side;
 
-            board.set_piece_at(col as usize, row as usize, piece_type, color);
+            board.set_piece_at(col as usize, row as usize, piece_type, piece_side);
         }
     }
 

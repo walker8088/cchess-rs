@@ -1,6 +1,6 @@
 /// Game module for Chinese Chess
 use crate::board::Board;
-use crate::pieces::Color;
+use crate::pieces::Side;
 
 /// Represents a move in the game tree
 #[derive(Debug, Clone)]
@@ -16,7 +16,7 @@ pub struct MoveNode {
     /// Board state after this move
     pub board_after: Board,
     /// Side to move after this move
-    pub next_turn: Color,
+    pub next_turn: Side,
     /// Main line continuation
     pub main_line: Option<Box<MoveNode>>,
     /// Variations (alternative lines)
@@ -30,11 +30,11 @@ pub struct Game {
     /// The current board state
     pub board: Board,
     /// The side whose turn it is
-    pub current_turn: Color,
+    pub current_turn: Side,
     /// Whether the game is over
     pub is_game_over: bool,
     /// The winner of the game (if game is over)
-    pub winner: Option<Color>,
+    pub winner: Option<Side>,
     /// Root moves of the game tree (first moves)
     pub root_moves: Vec<MoveNode>,
     /// Current position in the move tree
@@ -73,7 +73,7 @@ impl MoveNode {
         to: (usize, usize),
         uci_notation: String,
         board_after: Board,
-        next_turn: Color,
+        next_turn: Side,
         move_number: u32,
     ) -> Self {
         MoveNode {
@@ -189,9 +189,11 @@ impl Default for Game {
 impl Game {
     /// Create a new game with initial position
     pub fn new() -> Self {
+        let mut board = Board::new();
+        board.initial_position();
         Game {
-            board: Board::new(),
-            current_turn: Color::Red, // Red always moves first in Chinese Chess
+            board,
+            current_turn: Side::Red, // Red (红方) always moves first in Chinese Chess
             is_game_over: false,
             winner: None,
             root_moves: Vec::new(),
@@ -251,8 +253,8 @@ impl Game {
             self.board = new_board;
             self.current_turn = self.current_turn.opposite();
 
-            // Check for game over conditions (simplified - check if kings exist)
-            self.check_game_over_simple();
+            // Check for game over conditions
+            self.check_game_over();
 
             Ok(())
         } else {
@@ -304,9 +306,9 @@ impl Game {
             uci_notation,
             new_board,
             if parent_ply.is_multiple_of(2) {
-                Color::Red
+                Side::Red
             } else {
-                Color::Black
+                Side::Black
             },
             parent_ply,
         );
@@ -392,7 +394,10 @@ impl Game {
     pub fn navigate_to_move(&mut self, ply: u32) -> Result<(), String> {
         if ply == 0 {
             self.current_node = None;
-            self.board = Board::new();
+            let mut board = Board::new();
+            board.initial_position();
+            self.board = board;
+            self.current_turn = Side::Red;
             return Ok(());
         }
 
@@ -401,9 +406,9 @@ impl Game {
         if let Some(board) = target_board {
             self.board = board;
             self.current_turn = if ply.is_multiple_of(2) {
-                Color::Red
+                Side::Red
             } else {
-                Color::Black
+                Side::Black
             };
             Ok(())
         } else {
@@ -528,6 +533,91 @@ impl Game {
             .map_err(|e| format!("Failed to write XQF: {}", e))
     }
 
+    /// Read a game from a PGN file (auto-detects format by extension)
+    pub fn read_from(path: &str) -> Result<Self, String> {
+        if path.ends_with(".xqf") || path.ends_with(".XQF") {
+            // Read XQF file
+            let xqf = crate::xqf::read_xqf_with_variations(path)
+                .map_err(|e| format!("Failed to read XQF: {}", e))?;
+            crate::xqf::xqf_file_to_game(&xqf)
+                .map_err(|e| format!("Failed to convert XQF to game: {}", e))
+        } else {
+            // Read PGN file (try UTF-8 first, then GBK)
+            let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+            let content = match String::from_utf8(bytes.clone()) {
+                Ok(s) => s,
+                Err(_) => encoding_rs::GBK.decode(&bytes).0.into_owned(),
+            };
+            Self::from_pgn(&content)
+        }
+    }
+
+    /// Parse a game from a PGN string
+    pub fn from_pgn(pgn: &str) -> Result<Self, String> {
+        use crate::pgn::PGNParser;
+        let pgn_game = PGNParser::parse(pgn).map_err(|e| format!("Failed to parse PGN: {}", e))?;
+        pgn_game
+            .to_game()
+            .map_err(|e| format!("Failed to convert PGN to game: {}", e))
+    }
+
+    /// Save game to a file (auto-detects format by extension)
+    pub fn save_to(&self, path: &str) -> Result<(), String> {
+        if path.ends_with(".xqf") || path.ends_with(".XQF") {
+            self.export_xqf(path)
+        } else {
+            self.export_pgn(path)
+        }
+    }
+
+    /// Dump all move lines as text (returns Vec<Vec<String>> for all variations)
+    /// Each inner Vec is a complete move line with Chinese notation
+    pub fn dump_text_moves(&self) -> Vec<Vec<String>> {
+        let mut lines = Vec::new();
+        for root_move in &self.root_moves {
+            let mut line_moves = Vec::new();
+            let mut current: Option<&MoveNode> = Some(root_move);
+            // Track whose move it is for each ply
+            // First move is always Red's move
+            let mut is_red = true;
+            while let Some(node) = current {
+                line_moves.push(node.chinese_notation(is_red));
+                current = node.main_line.as_deref();
+                is_red = !is_red;
+            }
+            lines.push(line_moves);
+        }
+        if lines.is_empty() {
+            // Return empty line if no moves
+            lines.push(Vec::new());
+        }
+        lines
+    }
+
+    /// Verify that all moves in the game are legal
+    pub fn verify_moves(&self) -> bool {
+        // Re-play all moves from the initial position and check legality
+        for root_move in &self.root_moves {
+            let mut board = Board::new();
+            board.initial_position();
+
+            // Apply first move (always Red's first move)
+            if !board.make_move(root_move.from, root_move.to) {
+                return false;
+            }
+
+            // Follow main line
+            let mut current = root_move.main_line.as_ref();
+            while let Some(node) = current {
+                if !board.make_move(node.from, node.to) {
+                    return false;
+                }
+                current = node.main_line.as_ref();
+            }
+        }
+        true
+    }
+
     /// Get the current game state as a string
     pub fn display(&self) -> String {
         let moves = self.get_main_line();
@@ -544,8 +634,8 @@ impl Game {
     /// Create a game from an existing board
     pub fn from_board(board: Board) -> Self {
         Game {
-            board,
-            current_turn: Color::Red,
+            board: board.clone(),
+            current_turn: Side::Red,
             is_game_over: false,
             winner: None,
             root_moves: Vec::new(),
@@ -559,28 +649,389 @@ impl Game {
         &self.board
     }
 
-    /// Simple game over check - check if kings exist
-    fn check_game_over_simple(&mut self) {
-        // Simplified: check if both kings still exist on the board
-        let red_king_exists = self.find_king_position(Color::Red).is_some();
-        let black_king_exists = self.find_king_position(Color::Black).is_some();
+    /// Check if a specific side's king is in check
+    pub fn is_in_check(&self, side: Side) -> bool {
+        let king_pos = match self.find_king_position(side) {
+            Some(pos) => pos,
+            None => return true, // King doesn't exist = in check (shouldn't happen)
+        };
+        self.is_square_attacked(king_pos.0, king_pos.1, side)
+    }
+
+    /// Check if a square is attacked by the opponent of `defending_color`
+    fn is_square_attacked(&self, col: usize, row: usize, defending_side: Side) -> bool {
+        use crate::pieces::PieceType;
+        let attacking_side = defending_side.opposite();
+        let is_attacking_red = attacking_side == Side::Red;
+
+        // Iterate over all squares to find attacker pieces
+        for from_row in 0..10 {
+            for from_col in 0..9 {
+                let fen = self.board.squares[from_row][from_col];
+                if fen == '.' {
+                    continue;
+                }
+
+                let attacker_side = Side::from_fen(fen);
+                if attacker_side != Some(attacking_side) {
+                    continue;
+                }
+
+                let piece_type = match PieceType::from_fen(fen) {
+                    Some(pt) => pt,
+                    None => continue,
+                };
+
+                // Check if this piece can attack the target square
+                let can_attack = match piece_type {
+                    PieceType::King => {
+                        // King attacks adjacent squares within palace
+                        let dx = (col as isize - from_col as isize).abs();
+                        let dy = (row as isize - from_row as isize).abs();
+                        dx + dy == 1 && Board::is_in_palace(col, row, is_attacking_red)
+                    }
+                    PieceType::Advisor => {
+                        // Advisor attacks diagonally within palace
+                        let dx = (col as isize - from_col as isize).abs();
+                        let dy = (row as isize - from_row as isize).abs();
+                        dx == 1 && dy == 1 && Board::is_in_palace(col, row, is_attacking_red)
+                    }
+                    PieceType::Elephant => {
+                        // Elephant attacks in 田 pattern
+                        let dx = col as isize - from_col as isize;
+                        let dy = row as isize - from_row as isize;
+                        if dx.abs() != 2 || dy.abs() != 2 {
+                            false
+                        } else {
+                            // Check for blocking piece
+                            let block_col = from_col as isize + dx / 2;
+                            let block_row = from_row as isize + dy / 2;
+                            // Cannot cross river
+                            let crossed_river = if is_attacking_red { row > 4 } else { row < 5 };
+                            if crossed_river {
+                                false
+                            } else {
+                                self.board.squares[block_row as usize][block_col as usize] == '.'
+                            }
+                        }
+                    }
+                    PieceType::Knight => {
+                        // Knight attacks in 日 pattern
+                        let dx = col as isize - from_col as isize;
+                        let dy = row as isize - from_row as isize;
+                        let abs_dx = dx.abs();
+                        let abs_dy = dy.abs();
+                        if !((abs_dx == 1 && abs_dy == 2) || (abs_dx == 2 && abs_dy == 1)) {
+                            false
+                        } else {
+                            // Check for blocking piece
+                            if abs_dx == 2 {
+                                let block_col = from_col as isize + dx / 2;
+                                self.board.squares[from_row][block_col as usize] == '.'
+                            } else {
+                                let block_row = from_row as isize + dy / 2;
+                                self.board.squares[block_row as usize][from_col] == '.'
+                            }
+                        }
+                    }
+                    PieceType::Rook => {
+                        // Rook attacks in straight lines
+                        let dx = col as isize - from_col as isize;
+                        let dy = row as isize - from_row as isize;
+                        if dx != 0 && dy != 0 {
+                            false
+                        } else {
+                            !self.board.has_pieces_between(from_col, from_row, col, row)
+                        }
+                    }
+                    PieceType::Cannon => {
+                        // Cannon attacks in straight lines (can jump one piece to capture)
+                        let dx = col as isize - from_col as isize;
+                        let dy = row as isize - from_row as isize;
+                        if dx != 0 && dy != 0 {
+                            false
+                        } else {
+                            // Count pieces between
+                            let pieces_between = self
+                                .board
+                                .count_pieces_between(from_col, from_row, col, row);
+                            // For attacking an empty square or friendly piece: no pieces between
+                            // For attacking enemy piece (capture): exactly one piece between
+                            let target_fen = self.board.squares[row][col];
+                            if target_fen == '.' {
+                                pieces_between == 0
+                            } else {
+                                let target_side = Side::from_fen(target_fen);
+                                if target_side == Some(attacking_side) {
+                                    pieces_between == 0
+                                } else {
+                                    pieces_between == 1
+                                }
+                            }
+                        }
+                    }
+                    PieceType::Pawn => {
+                        // Pawn attacks one step forward
+                        let dx = col as isize - from_col as isize;
+                        let dy = row as isize - from_row as isize;
+                        let abs_dx = dx.abs();
+                        let abs_dy = dy.abs();
+                        if abs_dx + abs_dy != 1 {
+                            false
+                        } else if is_attacking_red {
+                            // Red pawn attacks forward (increasing row) or sideways after river
+                            let crossed_river = Board::is_across_river(from_row, true);
+                            if !crossed_river {
+                                dy == 1 && dx == 0
+                            } else {
+                                dy >= 0 // forward or sideways
+                            }
+                        } else {
+                            // Black pawn attacks forward (decreasing row) or sideways after river
+                            let crossed_river = Board::is_across_river(from_row, false);
+                            if !crossed_river {
+                                dy == -1 && dx == 0
+                            } else {
+                                dy <= 0 // forward or sideways
+                            }
+                        }
+                    }
+                };
+
+                if can_attack {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Check if a side has any legal moves
+    fn has_legal_moves(&self, side: Side) -> bool {
+        use crate::pieces::PieceType;
+        let is_red = side == Side::Red;
+
+        // Get all piece positions for this color
+        let positions = self.board.get_color_piece_positions(is_red);
+
+        for (from_col, from_row, fen_char) in &positions {
+            let piece_type = match PieceType::from_fen(*fen_char) {
+                Some(pt) => pt,
+                None => continue,
+            };
+
+            // Generate all possible destination squares for this piece
+            let possible_moves =
+                self.get_possible_destinations(piece_type, *from_col, *from_row, is_red);
+
+            for (to_col, to_row) in possible_moves {
+                // Simulate the move and check if it leaves king in check
+                let mut test_board = self.board.copy();
+                if test_board.make_move((*from_col, *from_row), (to_col, to_row)) {
+                    // Create test game to check if king is in check
+                    let test_game = Game {
+                        board: test_board,
+                        current_turn: side.opposite(),
+                        is_game_over: false,
+                        winner: None,
+                        root_moves: Vec::new(),
+                        current_node: None,
+                        metadata: GameMetadata::default(),
+                    };
+                    if !test_game.is_in_check(side) {
+                        return true; // Found a legal move
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Get possible destination squares for a piece (without full validation)
+    fn get_possible_destinations(
+        &self,
+        piece_type: crate::pieces::PieceType,
+        from_col: usize,
+        from_row: usize,
+        is_red: bool,
+    ) -> Vec<(usize, usize)> {
+        use crate::pieces::PieceType;
+        let mut destinations = Vec::new();
+
+        match piece_type {
+            PieceType::King => {
+                // Adjacent squares within palace
+                for (dc, dr) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+                    let nc = from_col as isize + dc;
+                    let nr = from_row as isize + dr;
+                    if (0..9).contains(&nc) && (0..10).contains(&nr) {
+                        let nc = nc as usize;
+                        let nr = nr as usize;
+                        if Board::is_in_palace(nc, nr, is_red) {
+                            destinations.push((nc, nr));
+                        }
+                    }
+                }
+            }
+            PieceType::Advisor => {
+                // Diagonal squares within palace
+                for (dc, dr) in [(1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                    let nc = from_col as isize + dc;
+                    let nr = from_row as isize + dr;
+                    if (0..9).contains(&nc) && (0..10).contains(&nr) {
+                        let nc = nc as usize;
+                        let nr = nr as usize;
+                        if Board::is_in_palace(nc, nr, is_red) {
+                            destinations.push((nc, nr));
+                        }
+                    }
+                }
+            }
+            PieceType::Elephant => {
+                // 田 pattern (2 diagonal steps)
+                for (dc, dr) in [(2, 2), (2, -2), (-2, 2), (-2, -2)] {
+                    let nc = from_col as isize + dc;
+                    let nr = from_row as isize + dr;
+                    if (0..9).contains(&nc) && (0..10).contains(&nr) {
+                        let nc = nc as usize;
+                        let nr = nr as usize;
+                        // Check river boundary
+                        let can_reach = if is_red { nr <= 4 } else { nr >= 5 };
+                        if can_reach {
+                            destinations.push((nc, nr));
+                        }
+                    }
+                }
+            }
+            PieceType::Knight => {
+                // 日 pattern
+                for (dc, dr) in [
+                    (1, 2),
+                    (1, -2),
+                    (-1, 2),
+                    (-1, -2),
+                    (2, 1),
+                    (2, -1),
+                    (-2, 1),
+                    (-2, -1),
+                ] {
+                    let nc = from_col as isize + dc;
+                    let nr = from_row as isize + dr;
+                    if (0..9).contains(&nc) && (0..10).contains(&nr) {
+                        destinations.push((nc as usize, nr as usize));
+                    }
+                }
+            }
+            PieceType::Rook => {
+                // All squares in straight lines
+                // Horizontal
+                for c in 0..9 {
+                    if c != from_col {
+                        destinations.push((c, from_row));
+                    }
+                }
+                // Vertical
+                for r in 0..10 {
+                    if r != from_row {
+                        destinations.push((from_col, r));
+                    }
+                }
+            }
+            PieceType::Cannon => {
+                // All squares in straight lines
+                // Horizontal
+                for c in 0..9 {
+                    if c != from_col {
+                        destinations.push((c, from_row));
+                    }
+                }
+                // Vertical
+                for r in 0..10 {
+                    if r != from_row {
+                        destinations.push((from_col, r));
+                    }
+                }
+            }
+            PieceType::Pawn => {
+                // One step in allowed directions
+                if is_red {
+                    // Forward
+                    if from_row + 1 < 10 {
+                        destinations.push((from_col, from_row + 1));
+                    }
+                    let crossed_river = Board::is_across_river(from_row, true);
+                    if crossed_river {
+                        // Left and right
+                        if from_col > 0 {
+                            destinations.push((from_col - 1, from_row));
+                        }
+                        if from_col < 8 {
+                            destinations.push((from_col + 1, from_row));
+                        }
+                    }
+                } else {
+                    // Forward
+                    if from_row > 0 {
+                        destinations.push((from_col, from_row - 1));
+                    }
+                    let crossed_river = Board::is_across_river(from_row, false);
+                    if crossed_river {
+                        // Left and right
+                        if from_col > 0 {
+                            destinations.push((from_col - 1, from_row));
+                        }
+                        if from_col < 8 {
+                            destinations.push((from_col + 1, from_row));
+                        }
+                    }
+                }
+            }
+        }
+
+        destinations
+    }
+
+    /// Check game over conditions: king captured, checkmate, or stalemate
+    fn check_game_over(&mut self) {
+        // Check if either king is missing
+        let red_king_exists = self.find_king_position(Side::Red).is_some();
+        let black_king_exists = self.find_king_position(Side::Black).is_some();
 
         if !red_king_exists {
             self.is_game_over = true;
-            self.winner = Some(Color::Black);
-        } else if !black_king_exists {
+            self.winner = Some(Side::Black);
+            return;
+        }
+        if !black_king_exists {
             self.is_game_over = true;
-            self.winner = Some(Color::Red);
+            self.winner = Some(Side::Red);
+            return;
+        }
+
+        // Check for checkmate or stalemate
+        if !self.has_legal_moves(self.current_turn) {
+            self.is_game_over = true;
+            if self.is_in_check(self.current_turn) {
+                // Checkmate: current side is in check with no legal moves
+                self.winner = Some(self.current_turn.opposite());
+            } else {
+                // Stalemate: current side is not in check but has no legal moves
+                // In Chinese Chess, stalemate is a win for the side that delivered it
+                // (opposite of Western chess rules)
+                self.winner = Some(self.current_turn.opposite());
+            }
         }
     }
 
     /// Find king position (simplified)
-    fn find_king_position(&self, color: Color) -> Option<(usize, usize)> {
+    fn find_king_position(&self, side: Side) -> Option<(usize, usize)> {
         use crate::pieces::PieceType;
         for row in 0..10 {
             for col in 0..9 {
-                if let Some((pt, c)) = self.board.get_piece_at(col, row) {
-                    if pt == PieceType::King && c == color {
+                if let Some((pt, s)) = self.board.get_piece_at(col, row) {
+                    if pt == PieceType::King && s == side {
                         return Some((col, row));
                     }
                 }

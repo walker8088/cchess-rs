@@ -12,44 +12,46 @@ pub enum PieceType {
     Pawn,     // 兵/卒 (P/p in FEN)
 }
 
-/// Colors in Chinese Chess
+/// Sides in Chinese Chess (matches Python: SIDE_ANY=0, SIDE_RED=1, SIDE_BLACK=2)
+/// Red = 红方 = uppercase FEN chars = "w" in FEN side-to-move
+/// Black = 黑方 = lowercase FEN chars = "b" in FEN side-to-move
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Color {
-    Any,   // 任意颜色
-    Red,   // 红方
-    Black, // 黑方
+pub enum Side {
+    Any,   // 任意边 (any side)
+    Red,   // 红方 (uppercase FEN chars, "w" in FEN)
+    Black, // 黑方 (lowercase FEN chars, "b" in FEN)
 }
 
-impl Color {
-    /// Get the opposite color
-    pub fn opposite(&self) -> Color {
+impl Side {
+    /// Get the opposite side
+    pub fn opposite(&self) -> Side {
         match self {
-            Color::Any => Color::Any,
-            Color::Red => Color::Black,
-            Color::Black => Color::Red,
+            Side::Any => Side::Any,
+            Side::Red => Side::Black,
+            Side::Black => Side::Red,
         }
     }
 
-    /// Check if a FEN character belongs to this color
+    /// Check if a FEN character belongs to this side
     pub fn matches_fen(&self, fen_char: char) -> bool {
         match self {
-            Color::Any => fen_char != '.',
-            Color::Red => fen_char.is_lowercase() && fen_char != '.',
-            Color::Black => fen_char.is_uppercase(),
+            Side::Any => fen_char != '.',
+            Side::Red => fen_char.is_uppercase(),
+            Side::Black => fen_char.is_lowercase() && fen_char != '.',
         }
     }
 
-    /// Get color from FEN character
-    pub fn from_fen(fen_char: char) -> Option<Color> {
+    /// Get side from FEN character
+    pub fn from_fen(fen_char: char) -> Option<Side> {
         // First check if it's a valid FEN character
         if PieceType::from_fen(fen_char).is_none() && fen_char != '.' {
             return None;
         }
 
         if fen_char.is_lowercase() && fen_char != '.' {
-            Some(Color::Red)
+            Some(Side::Black)
         } else if fen_char.is_uppercase() {
-            Some(Color::Black)
+            Some(Side::Red)
         } else {
             None
         }

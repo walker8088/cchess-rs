@@ -1,7 +1,7 @@
 /// 走法中间表示模块
 /// 实现中国象棋走法的中间表示，支持简体中文、繁体中文和紧凑格式
 use crate::board::Board;
-use crate::pieces::{Color, PieceType};
+use crate::pieces::{PieceType, Side};
 
 /// 走法方向
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,7 +24,7 @@ pub enum Qualifier {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveFormat {
     Chinese, // 中文传统记谱法
-    Compact, // 紧凑格式
+    WXF,     // WXF (World XiangQi Federation) 格式
     ICCS,    // ICCS坐标格式
 }
 
@@ -39,7 +39,7 @@ pub enum ChineseLocale {
 #[derive(Debug, Clone)]
 pub struct MoveNotation {
     pub piece_type: PieceType,        // 棋子类型
-    pub piece_color: Color,           // 棋子颜色
+    pub piece_color: Side,            // 棋子颜色
     pub column: u8,                   // 列 (0-8，红方视角)
     pub direction: Direction,         // 方向
     pub distance: u8,                 // 距离/目标列
@@ -82,7 +82,7 @@ impl MoveNotation {
             None => return Err(format!("无效的棋子字符: {}", piece_fen)),
         };
 
-        let color = piece_color.unwrap_or(Color::Red);
+        let color = piece_color.unwrap_or(Side::Black);
 
         // 检查是否为吃子
         let is_capture = !board.is_empty_at(to_col, to_row);
@@ -99,7 +99,7 @@ impl MoveNotation {
         // 根据颜色应用棋盘翻转（仅用于方向计算）
         // 关键：翻转后统一使用红方视角处理方向
         let (src_col_for_dir, src_row_for_dir, dst_col_for_dir, dst_row_for_dir) =
-            if color == Color::Black {
+            if color == Side::Red {
                 // 黑方走子：反转棋盘一次，然后用红方逻辑处理方向
                 (
                     flip_coordinate(from_col, from_row).0,
@@ -114,7 +114,7 @@ impl MoveNotation {
 
         // 计算方向：翻转后统一使用红方规则
         let direction = calculate_direction(
-            Color::Red,
+            Side::Black,
             src_col_for_dir,
             src_row_for_dir,
             dst_col_for_dir,
@@ -203,31 +203,32 @@ impl MoveNotation {
         result
     }
 
-    /// 转换为紧凑格式
-    pub fn to_compact(&self) -> String {
+    /// 转换为 WXF (World XiangQi Federation) 格式
+    /// e.g., 炮二平五 -> C2.5, 马8进7 -> N8+7
+    pub fn to_wxf(&self) -> String {
         let mut result = String::new();
 
-        // 添加限定词
+        // 添加限定词（前/中/后 → +/-/.)
         if let Some(qualifier) = self.qualifier {
             match qualifier {
-                Qualifier::Front => result.push('f'),
-                Qualifier::Middle => result.push('m'),
-                Qualifier::Back => result.push('b'),
+                Qualifier::Front => result.push('+'),
+                Qualifier::Middle => result.push('-'),
+                Qualifier::Back => result.push('.'),
                 Qualifier::Number(n) => result.push_str(&n.to_string()),
             };
         }
 
         // 添加棋子字母
-        result.push(piece_to_compact_letter(self.piece_type, self.piece_color));
+        result.push(piece_to_wxf_letter(self.piece_type));
 
-        // 添加列
+        // 添加路数
         result.push_str(&self.column.to_string());
 
-        // 添加方向符号
+        // 方向符号（WXF用 . 表示平）
         result.push(match self.direction {
             Direction::Forward => '+',
             Direction::Backward => '-',
-            Direction::Horizontal => '=',
+            Direction::Horizontal => '.',
         });
 
         // 添加距离
@@ -274,7 +275,7 @@ fn flip_coordinate(col: usize, row: usize) -> (usize, usize) {
 
 /// 计算方向
 fn calculate_direction(
-    color: Color,
+    color: Side,
     src_col: usize,
     src_row: usize,
     dst_col: usize,
@@ -288,9 +289,9 @@ fn calculate_direction(
     // 列相同：垂直移动
     if src_col == dst_col {
         let is_forward = match color {
-            Color::Red => dst_row > src_row,   // 红方：向上为进
-            Color::Black => dst_row < src_row, // 黑方：向下为进
-            Color::Any => dst_row > src_row,   // 默认红方
+            Side::Black => dst_row > src_row, // lowercase side: upward = forward
+            Side::Red => dst_row < src_row,   // uppercase side: downward = forward
+            Side::Any => dst_row > src_row,   // default lowercase side
         };
         if is_forward {
             Direction::Forward
@@ -300,9 +301,9 @@ fn calculate_direction(
     } else {
         // 列和行都不同：斜线移动（马、士、象）
         let is_forward = match color {
-            Color::Red => dst_row > src_row,   // 红方：向上为进
-            Color::Black => dst_row < src_row, // 黑方：向下为进
-            Color::Any => dst_row > src_row,   // 默认红方
+            Side::Black => dst_row > src_row, // lowercase side: upward = forward
+            Side::Red => dst_row < src_row,   // uppercase side: downward = forward
+            Side::Any => dst_row > src_row,   // default lowercase side
         };
         if is_forward {
             Direction::Forward
@@ -343,7 +344,7 @@ fn calculate_distance(
 fn calculate_qualifier(
     board: &Board,
     piece_type: PieceType,
-    color: Color,
+    color: Side,
     col: usize,
     row: usize,
 ) -> Option<Qualifier> {
@@ -381,11 +382,11 @@ fn calculate_qualifier(
     // 红方：row 从大到小（靠近对方底线=前，靠近己方底线=后）
     // 黑方：row 从小到大（靠近对方底线=前，靠近己方底线=后）
     same_pieces.sort_by(|r1, r2| {
-        if color == Color::Red {
-            // 红方：从大到小（前->后）
+        if color == Side::Black {
+            // lowercase side: larger row = rear, smaller row = front
             r2.cmp(r1)
         } else {
-            // 黑方：从小到大（前->后）
+            // uppercase side: smaller row = front, larger row = rear
             r1.cmp(r2)
         }
     });
@@ -396,7 +397,7 @@ fn calculate_qualifier(
 
     // 重新排序
     all_pieces.sort_by(|r1, r2| {
-        if color == Color::Red {
+        if color == Side::Black {
             r2.cmp(r1)
         } else {
             r1.cmp(r2)
@@ -433,7 +434,7 @@ fn calculate_qualifier(
 }
 
 /// 获取棋子名称
-fn get_piece_name(piece_type: PieceType, color: Color, locale: ChineseLocale) -> String {
+fn get_piece_name(piece_type: PieceType, color: Side, locale: ChineseLocale) -> String {
     match locale {
         ChineseLocale::Simplified => simplified_piece_name(piece_type, color),
         ChineseLocale::Traditional => traditional_piece_name(piece_type, color),
@@ -441,50 +442,50 @@ fn get_piece_name(piece_type: PieceType, color: Color, locale: ChineseLocale) ->
 }
 
 /// 获取简体中文棋子名称
-fn simplified_piece_name(piece_type: PieceType, color: Color) -> String {
+fn simplified_piece_name(piece_type: PieceType, color: Side) -> String {
     match (piece_type, color) {
-        // 红方：帅、仕、相、马、车、炮、兵
-        (PieceType::King, Color::Red) => "帅".to_string(),
-        (PieceType::Advisor, Color::Red) => "仕".to_string(),
-        (PieceType::Elephant, Color::Red) => "相".to_string(),
-        (PieceType::Knight, Color::Red) => "马".to_string(),
-        (PieceType::Rook, Color::Red) => "车".to_string(),
-        (PieceType::Cannon, Color::Red) => "炮".to_string(),
-        (PieceType::Pawn, Color::Red) => "兵".to_string(),
+        // lowercase side (Black): 帅、仕、相、马、车、炮、兵
+        (PieceType::King, Side::Black) => "帅".to_string(),
+        (PieceType::Advisor, Side::Black) => "仕".to_string(),
+        (PieceType::Elephant, Side::Black) => "相".to_string(),
+        (PieceType::Knight, Side::Black) => "马".to_string(),
+        (PieceType::Rook, Side::Black) => "车".to_string(),
+        (PieceType::Cannon, Side::Black) => "炮".to_string(),
+        (PieceType::Pawn, Side::Black) => "兵".to_string(),
 
-        // 黑方：将、士、象、马、车、炮、卒
-        (PieceType::King, Color::Black) => "将".to_string(),
-        (PieceType::Advisor, Color::Black) => "士".to_string(),
-        (PieceType::Elephant, Color::Black) => "象".to_string(),
-        (PieceType::Knight, Color::Black) => "马".to_string(),
-        (PieceType::Rook, Color::Black) => "车".to_string(),
-        (PieceType::Cannon, Color::Black) => "炮".to_string(),
-        (PieceType::Pawn, Color::Black) => "卒".to_string(),
+        // uppercase side (Red): 将、士、象、马、车、炮、卒
+        (PieceType::King, Side::Red) => "将".to_string(),
+        (PieceType::Advisor, Side::Red) => "士".to_string(),
+        (PieceType::Elephant, Side::Red) => "象".to_string(),
+        (PieceType::Knight, Side::Red) => "马".to_string(),
+        (PieceType::Rook, Side::Red) => "车".to_string(),
+        (PieceType::Cannon, Side::Red) => "炮".to_string(),
+        (PieceType::Pawn, Side::Red) => "卒".to_string(),
 
         _ => "?".to_string(),
     }
 }
 
 /// 获取繁体中文棋子名称
-fn traditional_piece_name(piece_type: PieceType, color: Color) -> String {
+fn traditional_piece_name(piece_type: PieceType, color: Side) -> String {
     match (piece_type, color) {
-        // 红方：帥、仕、相、馬、車、砲、兵
-        (PieceType::King, Color::Red) => "帥".to_string(),
-        (PieceType::Advisor, Color::Red) => "仕".to_string(),
-        (PieceType::Elephant, Color::Red) => "相".to_string(),
-        (PieceType::Knight, Color::Red) => "馬".to_string(),
-        (PieceType::Rook, Color::Red) => "車".to_string(),
-        (PieceType::Cannon, Color::Red) => "砲".to_string(),
-        (PieceType::Pawn, Color::Red) => "兵".to_string(),
+        // lowercase side (Black): 帥、仕、相、馬、車、砲、兵
+        (PieceType::King, Side::Black) => "帥".to_string(),
+        (PieceType::Advisor, Side::Black) => "仕".to_string(),
+        (PieceType::Elephant, Side::Black) => "相".to_string(),
+        (PieceType::Knight, Side::Black) => "馬".to_string(),
+        (PieceType::Rook, Side::Black) => "車".to_string(),
+        (PieceType::Cannon, Side::Black) => "砲".to_string(),
+        (PieceType::Pawn, Side::Black) => "兵".to_string(),
 
-        // 黑方：將、士、象、傌、俥、砲、卒
-        (PieceType::King, Color::Black) => "將".to_string(),
-        (PieceType::Advisor, Color::Black) => "士".to_string(),
-        (PieceType::Elephant, Color::Black) => "象".to_string(),
-        (PieceType::Knight, Color::Black) => "傌".to_string(),
-        (PieceType::Rook, Color::Black) => "俥".to_string(),
-        (PieceType::Cannon, Color::Black) => "砲".to_string(),
-        (PieceType::Pawn, Color::Black) => "卒".to_string(),
+        // uppercase side (Red): 將、士、象、傌、俥、砲、卒
+        (PieceType::King, Side::Red) => "將".to_string(),
+        (PieceType::Advisor, Side::Red) => "士".to_string(),
+        (PieceType::Elephant, Side::Red) => "象".to_string(),
+        (PieceType::Knight, Side::Red) => "傌".to_string(),
+        (PieceType::Rook, Side::Red) => "俥".to_string(),
+        (PieceType::Cannon, Side::Red) => "砲".to_string(),
+        (PieceType::Pawn, Side::Red) => "卒".to_string(),
 
         _ => "?".to_string(),
     }
@@ -525,15 +526,15 @@ fn direction_to_string(direction: Direction, locale: ChineseLocale) -> String {
 }
 
 /// 格式化数字（根据颜色）
-fn format_number(number: u8, color: Color, locale: ChineseLocale) -> String {
-    if color == Color::Red {
-        // 红方：中文数字
+fn format_number(number: u8, color: Side, locale: ChineseLocale) -> String {
+    if color == Side::Black {
+        // lowercase side: Chinese numerals
         match locale {
             ChineseLocale::Simplified => simplified_number(number),
             ChineseLocale::Traditional => traditional_number(number),
         }
     } else {
-        // 黑方：全角数字
+        // uppercase side: fullwidth numerals
         fullwidth_number(number)
     }
 }
@@ -576,9 +577,9 @@ fn fullwidth_number(number: u8) -> String {
     }
 }
 
-/// 棋子转换为紧凑格式字母
-fn piece_to_compact_letter(piece_type: PieceType, color: Color) -> char {
-    let base_char = match piece_type {
+/// 棋子转换为 WXF 格式字母 (统一大写)
+fn piece_to_wxf_letter(piece_type: PieceType) -> char {
+    match piece_type {
         PieceType::King => 'K',
         PieceType::Advisor => 'A',
         PieceType::Elephant => 'B',
@@ -586,12 +587,6 @@ fn piece_to_compact_letter(piece_type: PieceType, color: Color) -> char {
         PieceType::Rook => 'R',
         PieceType::Cannon => 'C',
         PieceType::Pawn => 'P',
-    };
-
-    match color {
-        Color::Red => base_char,                        // 红方：大写
-        Color::Black => base_char.to_ascii_lowercase(), // 黑方：小写
-        Color::Any => base_char,
     }
 }
 
@@ -611,29 +606,29 @@ mod tests {
     fn test_calculate_direction() {
         // 红方方向
         assert_eq!(
-            calculate_direction(Color::Red, 0, 0, 0, 1),
+            calculate_direction(Side::Black, 0, 0, 0, 1),
             Direction::Forward
         );
         assert_eq!(
-            calculate_direction(Color::Red, 0, 1, 0, 0),
+            calculate_direction(Side::Black, 0, 1, 0, 0),
             Direction::Backward
         );
         assert_eq!(
-            calculate_direction(Color::Red, 0, 0, 1, 0),
+            calculate_direction(Side::Black, 0, 0, 1, 0),
             Direction::Horizontal
         );
 
-        // 黑方方向
+        // uppercase side direction
         assert_eq!(
-            calculate_direction(Color::Black, 0, 9, 0, 8),
+            calculate_direction(Side::Red, 0, 9, 0, 8),
             Direction::Forward
         );
         assert_eq!(
-            calculate_direction(Color::Black, 0, 8, 0, 9),
+            calculate_direction(Side::Red, 0, 8, 0, 9),
             Direction::Backward
         );
         assert_eq!(
-            calculate_direction(Color::Black, 0, 9, 1, 9),
+            calculate_direction(Side::Red, 0, 9, 1, 9),
             Direction::Horizontal
         );
     }
@@ -655,43 +650,40 @@ mod tests {
     #[test]
     fn test_piece_names() {
         // 测试简体中文棋子名称
-        assert_eq!(simplified_piece_name(PieceType::King, Color::Red), "帅");
-        assert_eq!(simplified_piece_name(PieceType::King, Color::Black), "将");
-        assert_eq!(simplified_piece_name(PieceType::Rook, Color::Red), "车");
-        assert_eq!(simplified_piece_name(PieceType::Rook, Color::Black), "车");
-        assert_eq!(simplified_piece_name(PieceType::Cannon, Color::Red), "炮");
-        assert_eq!(simplified_piece_name(PieceType::Cannon, Color::Black), "炮");
-        assert_eq!(simplified_piece_name(PieceType::Pawn, Color::Red), "兵");
-        assert_eq!(simplified_piece_name(PieceType::Pawn, Color::Black), "卒");
+        assert_eq!(simplified_piece_name(PieceType::King, Side::Black), "帅");
+        assert_eq!(simplified_piece_name(PieceType::King, Side::Red), "将");
+        assert_eq!(simplified_piece_name(PieceType::Rook, Side::Black), "车");
+        assert_eq!(simplified_piece_name(PieceType::Rook, Side::Red), "车");
+        assert_eq!(simplified_piece_name(PieceType::Cannon, Side::Black), "炮");
+        assert_eq!(simplified_piece_name(PieceType::Cannon, Side::Red), "炮");
+        assert_eq!(simplified_piece_name(PieceType::Pawn, Side::Black), "兵");
+        assert_eq!(simplified_piece_name(PieceType::Pawn, Side::Red), "卒");
 
         // 测试繁体中文棋子名称
-        assert_eq!(traditional_piece_name(PieceType::King, Color::Red), "帥");
-        assert_eq!(traditional_piece_name(PieceType::King, Color::Black), "將");
-        assert_eq!(traditional_piece_name(PieceType::Rook, Color::Red), "車");
-        assert_eq!(traditional_piece_name(PieceType::Rook, Color::Black), "俥");
-        assert_eq!(traditional_piece_name(PieceType::Cannon, Color::Red), "砲");
-        assert_eq!(
-            traditional_piece_name(PieceType::Cannon, Color::Black),
-            "砲"
-        );
+        assert_eq!(traditional_piece_name(PieceType::King, Side::Black), "帥");
+        assert_eq!(traditional_piece_name(PieceType::King, Side::Red), "將");
+        assert_eq!(traditional_piece_name(PieceType::Rook, Side::Black), "車");
+        assert_eq!(traditional_piece_name(PieceType::Rook, Side::Red), "俥");
+        assert_eq!(traditional_piece_name(PieceType::Cannon, Side::Black), "砲");
+        assert_eq!(traditional_piece_name(PieceType::Cannon, Side::Red), "砲");
     }
 
     #[test]
-    fn test_compact_piece_letter() {
-        assert_eq!(piece_to_compact_letter(PieceType::King, Color::Red), 'K');
-        assert_eq!(piece_to_compact_letter(PieceType::King, Color::Black), 'k');
-        assert_eq!(piece_to_compact_letter(PieceType::Rook, Color::Red), 'R');
-        assert_eq!(piece_to_compact_letter(PieceType::Rook, Color::Black), 'r');
-        assert_eq!(piece_to_compact_letter(PieceType::Cannon, Color::Red), 'C');
-        assert_eq!(
-            piece_to_compact_letter(PieceType::Cannon, Color::Black),
-            'c'
-        );
+    fn test_wxf_piece_letter() {
+        // WXF 统一使用大写字母
+        assert_eq!(piece_to_wxf_letter(PieceType::King), 'K');
+        assert_eq!(piece_to_wxf_letter(PieceType::Advisor), 'A');
+        assert_eq!(piece_to_wxf_letter(PieceType::Elephant), 'B');
+        assert_eq!(piece_to_wxf_letter(PieceType::Knight), 'N');
+        assert_eq!(piece_to_wxf_letter(PieceType::Rook), 'R');
+        assert_eq!(piece_to_wxf_letter(PieceType::Cannon), 'C');
+        assert_eq!(piece_to_wxf_letter(PieceType::Pawn), 'P');
     }
 
     #[test]
     fn test_move_notation_creation() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试红方车九进一
         let result = MoveNotation::from_board_move(&board, (0, 0), (0, 1));
@@ -699,7 +691,7 @@ mod tests {
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Rook);
-        assert_eq!(notation.piece_color, Color::Red);
+        assert_eq!(notation.piece_color, Side::Black);
         assert_eq!(notation.column, 9); // 九路（最左边）
         assert_eq!(notation.direction, Direction::Forward);
         assert_eq!(notation.distance, 1);
@@ -712,14 +704,15 @@ mod tests {
         let traditional = notation.to_chinese(ChineseLocale::Traditional);
         assert_eq!(traditional, "車九進一");
 
-        // 转换为紧凑格式
-        let compact = notation.to_compact();
-        assert_eq!(compact, "R9+1");
+        // 转换为 WXF 格式
+        let wxf = notation.to_wxf();
+        assert_eq!(wxf, "R9+1");
     }
 
     #[test]
     fn test_black_move_notation() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试黑方车9进1（从(0,9)到(0,8)）
         let result = MoveNotation::from_board_move(&board, (0, 9), (0, 8));
@@ -727,8 +720,8 @@ mod tests {
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Rook);
-        assert_eq!(notation.piece_color, Color::Black);
-        // 注意：经过翻转后，黑方车在红方视角下是第九路
+        assert_eq!(notation.piece_color, Side::Red);
+        // 注意：经过翻转后，uppercase side 的车在 lowercase side 视角下是第九路
         assert_eq!(notation.column, 9);
         assert_eq!(notation.direction, Direction::Forward);
         assert_eq!(notation.distance, 1);
@@ -737,14 +730,15 @@ mod tests {
         let chinese = notation.to_chinese(ChineseLocale::Simplified);
         assert_eq!(chinese, "车９进１");
 
-        // 转换为紧凑格式（小写表示黑方）
-        let compact = notation.to_compact();
-        assert_eq!(compact, "r9+1");
+        // 转换为 WXF 格式（统一大写）
+        let wxf = notation.to_wxf();
+        assert_eq!(wxf, "R9+1");
     }
 
     #[test]
     fn test_cannon_move() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试红方炮二平五（从(7,2)到(4,2)）
         // 右边的炮在(7,2)，这是二路（从右向左数：9-7=2）
@@ -753,7 +747,7 @@ mod tests {
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Cannon);
-        assert_eq!(notation.piece_color, Color::Red);
+        assert_eq!(notation.piece_color, Side::Black);
         assert_eq!(notation.column, 2); // 二路（从右向左数）
         assert_eq!(notation.direction, Direction::Horizontal);
         assert_eq!(notation.distance, 5); // 平到五路
@@ -766,14 +760,15 @@ mod tests {
         let traditional = notation.to_chinese(ChineseLocale::Traditional);
         assert_eq!(traditional, "砲二平五");
 
-        // 转换为紧凑格式
-        let compact = notation.to_compact();
-        assert_eq!(compact, "C2=5");
+        // 转换为 WXF 格式
+        let wxf = notation.to_wxf();
+        assert_eq!(wxf, "C2.5");
     }
 
     #[test]
     fn test_knight_move() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试红方马八进七（从(1,0)到(2,2)）
         // 左边的马在(1,0)，这是八路（从右向左数：9-1=8）
@@ -783,7 +778,7 @@ mod tests {
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Knight);
-        assert_eq!(notation.piece_color, Color::Red);
+        assert_eq!(notation.piece_color, Side::Black);
         assert_eq!(notation.column, 8); // 八路（从右向左数）
         assert_eq!(notation.direction, Direction::Forward);
         // 马进到七路，距离应该是目标路数
@@ -796,7 +791,8 @@ mod tests {
 
     #[test]
     fn test_invalid_moves() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试无效坐标
         let result = MoveNotation::from_board_move(&board, (10, 10), (0, 0));
@@ -812,6 +808,7 @@ mod tests {
         // 创建一个红方车吃红方马的局面
         let mut board = Board::new();
         // 在(1,0)放一个红方马，在(0,0)放一个红方车
+        board.set_fen(0, 0, 'r');
         board.set_fen(1, 0, 'n');
         let result = MoveNotation::from_board_move(&board, (0, 0), (1, 0));
         assert!(result.is_err());
@@ -837,7 +834,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Front));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "前车进一");
-        assert_eq!(notation.to_compact(), "fR5+1");
+        assert_eq!(notation.to_wxf(), "+R5+1");
 
         // 后车进一
         let result = MoveNotation::from_board_move(&board, (4, 1), (4, 2));
@@ -845,7 +842,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Back));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "后车进一");
-        assert_eq!(notation.to_compact(), "bR5+1");
+        assert_eq!(notation.to_wxf(), ".R5+1");
     }
 
     #[test]
@@ -859,23 +856,23 @@ mod tests {
         board.set_fen(4, 9, 'K'); // 黑将
         board.set_fen(4, 0, 'k'); // 红帅
 
-        // 前兵进一
+        // 前兵进一（从原始位置）
         let notation = MoveNotation::from_board_move(&board, (4, 5), (4, 6)).unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Front));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "前兵进一");
-        assert_eq!(notation.to_compact(), "fP5+1");
+        assert_eq!(notation.to_wxf(), "+P5+1");
 
-        // 中兵进一
+        // 中兵进一（从原始位置）
         let notation = MoveNotation::from_board_move(&board, (4, 3), (4, 4)).unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Middle));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "中兵进一");
-        assert_eq!(notation.to_compact(), "mP5+1");
+        assert_eq!(notation.to_wxf(), "-P5+1");
 
-        // 后兵进一
+        // 后兵进一（从原始位置）
         let notation = MoveNotation::from_board_move(&board, (4, 1), (4, 2)).unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Back));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "后兵进一");
-        assert_eq!(notation.to_compact(), "bP5+1");
+        assert_eq!(notation.to_wxf(), ".P5+1");
     }
 
     #[test]
@@ -895,31 +892,31 @@ mod tests {
         let notation = MoveNotation::from_board_move(&board, (4, 5), (3, 5)).unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Number(1)));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "一兵平六");
-        assert_eq!(notation.to_compact(), "1P5=6");
+        assert_eq!(notation.to_wxf(), "1P5.6");
 
         // 第二个兵 = 二兵，横移测试
         let notation = MoveNotation::from_board_move(&board, (4, 4), (5, 4)).unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Number(2)));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "二兵平四");
-        assert_eq!(notation.to_compact(), "2P5=4");
+        assert_eq!(notation.to_wxf(), "2P5.4");
 
         // 中间的兵 = 三兵，横移测试
         let notation = MoveNotation::from_board_move(&board, (4, 3), (3, 3)).unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Number(3)));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "三兵平六");
-        assert_eq!(notation.to_compact(), "3P5=6");
+        assert_eq!(notation.to_wxf(), "3P5.6");
 
         // 第四个兵 = 四兵，横移测试
         let notation = MoveNotation::from_board_move(&board, (4, 2), (5, 2)).unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Number(4)));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "四兵平四");
-        assert_eq!(notation.to_compact(), "4P5=4");
+        assert_eq!(notation.to_wxf(), "4P5.4");
 
         // 最后面的兵 = 五兵，横移测试（避免吃到自己的兵）
         let notation = MoveNotation::from_board_move(&board, (4, 1), (3, 1)).unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Number(5)));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "五兵平六");
-        assert_eq!(notation.to_compact(), "5P5=6");
+        assert_eq!(notation.to_wxf(), "5P5.6");
     }
 
     #[test]
@@ -938,9 +935,9 @@ mod tests {
         assert!(result.is_ok());
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Front));
-        // 黑方使用全角数字，紧凑格式使用小写字母
+        // 黑方使用全角数字，WXF格式统一大写
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "前车进１");
-        assert_eq!(notation.to_compact(), "fr5+1");
+        assert_eq!(notation.to_wxf(), "+R5+1");
 
         // 黑方后车进一
         let result = MoveNotation::from_board_move(&board, (4, 8), (4, 7));
@@ -948,7 +945,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Back));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "后车进１");
-        assert_eq!(notation.to_compact(), "br5+1");
+        assert_eq!(notation.to_wxf(), ".R5+1");
     }
 
     #[test]
@@ -969,7 +966,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Front));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "前卒进１");
-        assert_eq!(notation.to_compact(), "fp5+1");
+        assert_eq!(notation.to_wxf(), "+P5+1");
 
         // 黑方中卒进一
         let result = MoveNotation::from_board_move(&board, (4, 5), (4, 4));
@@ -977,7 +974,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Middle));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "中卒进１");
-        assert_eq!(notation.to_compact(), "mp5+1");
+        assert_eq!(notation.to_wxf(), "-P5+1");
 
         // 黑方后卒进一
         let result = MoveNotation::from_board_move(&board, (4, 7), (4, 6));
@@ -985,7 +982,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Back));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "后卒进１");
-        assert_eq!(notation.to_compact(), "bp5+1");
+        assert_eq!(notation.to_wxf(), ".P5+1");
     }
 
     #[test]
@@ -1004,7 +1001,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Front));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "前炮平六");
-        assert_eq!(notation.to_compact(), "fC5=6");
+        assert_eq!(notation.to_wxf(), "+C5.6");
 
         // 后炮平四
         let result = MoveNotation::from_board_move(&board, (4, 1), (5, 1));
@@ -1012,7 +1009,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Back));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "后炮平四");
-        assert_eq!(notation.to_compact(), "bC5=4");
+        assert_eq!(notation.to_wxf(), ".C5.4");
     }
 
     #[test]
@@ -1031,7 +1028,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Front));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "前马进七");
-        assert_eq!(notation.to_compact(), "fN6+7");
+        assert_eq!(notation.to_wxf(), "+N6+7");
 
         // 后马进七
         let result = MoveNotation::from_board_move(&board, (3, 1), (2, 3));
@@ -1039,7 +1036,7 @@ mod tests {
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Back));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "后马进七");
-        assert_eq!(notation.to_compact(), "bN6+7");
+        assert_eq!(notation.to_wxf(), ".N6+7");
     }
 
     #[test]

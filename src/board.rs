@@ -1,6 +1,6 @@
 /// Board module for Chinese Chess
 use crate::move_notation::{ChineseLocale, MoveFormat, MoveNotation};
-use crate::pieces::{Color, PieceType};
+use crate::pieces::{PieceType, Side};
 
 /// Represents the game board
 #[derive(Debug, Clone)]
@@ -17,43 +17,33 @@ impl Default for Board {
 }
 
 impl Board {
-    /// Create a new board with initial position
+    /// Create a new empty board (all squares are empty)
     pub fn new() -> Self {
-        let mut squares = [['.'; 9]; 10];
+        let squares = [['.'; 9]; 10];
+        Board { squares }
+    }
 
-        // Initialize starting position for Chinese Chess using FEN notation
-        // Red pieces (bottom side, rows 0-2) - lowercase in FEN
-        // Black pieces (top side, rows 7-9) - uppercase in FEN
-        // FEN characters: k=King, a=Advisor, b=Elephant, n=Knight, r=Rook, c=Cannon, p=Pawn
-        // Standard Chinese Chess starting position:
-        // Row 0 (red back row): r n b a k a b n r
-        // Row 2 (red cannons): . c . . . . . c .
-        // Row 3 (red pawns): p . p . p . p . p
-        // Row 6 (black pawns): P . P . P . P . P
-        // Row 7 (black cannons): . C . . . . . C .
-        // Row 9 (black back row): R N B A K A B N R
-
-        // Red pieces (bottom side)
+    /// Set up the board with the standard Chinese Chess initial position
+    pub fn initial_position(&mut self) {
+        // Black pieces (黑方, top side in board visualization)
         // Row 0: Rooks, Knights, Elephants, Advisors, King, Advisors, Elephants, Knights, Rooks
-        squares[0] = ['r', 'n', 'b', 'a', 'k', 'a', 'b', 'n', 'r'];
+        self.squares[0] = ['r', 'n', 'b', 'a', 'k', 'a', 'b', 'n', 'r'];
 
-        // Row 2: Red cannons
-        squares[2] = ['.', 'c', '.', '.', '.', '.', '.', 'c', '.'];
+        // Row 2: Black cannons (黑方砲)
+        self.squares[2] = ['.', 'c', '.', '.', '.', '.', '.', 'c', '.'];
 
-        // Row 3: Red pawns (every other column)
-        squares[3] = ['p', '.', 'p', '.', 'p', '.', 'p', '.', 'p'];
+        // Row 3: Black pawns (黑方卒)
+        self.squares[3] = ['p', '.', 'p', '.', 'p', '.', 'p', '.', 'p'];
 
-        // Black pieces (top side)
-        // Row 6: Black pawns (every other column)
-        squares[6] = ['P', '.', 'P', '.', 'P', '.', 'P', '.', 'P'];
+        // Red pieces (红方, bottom side in board visualization)
+        // Row 6: Red pawns (红方兵)
+        self.squares[6] = ['P', '.', 'P', '.', 'P', '.', 'P', '.', 'P'];
 
-        // Row 7: Black cannons
-        squares[7] = ['.', 'C', '.', '.', '.', '.', '.', 'C', '.'];
+        // Row 7: Red cannons (红方炮)
+        self.squares[7] = ['.', 'C', '.', '.', '.', '.', '.', 'C', '.'];
 
         // Row 9: Rooks, Knights, Elephants, Advisors, King, Advisors, Elephants, Knights, Rooks
-        squares[9] = ['R', 'N', 'B', 'A', 'K', 'A', 'B', 'N', 'R'];
-
-        Board { squares }
+        self.squares[9] = ['R', 'N', 'B', 'A', 'K', 'A', 'B', 'N', 'R'];
     }
 
     /// Create a board from a FEN string
@@ -157,6 +147,7 @@ impl Board {
     }
 
     /// Make a move on the board
+    /// Validates piece-specific movement rules before executing
     pub fn make_move(&mut self, from: (usize, usize), to: (usize, usize)) -> bool {
         let (from_col, from_row) = from;
         let (to_col, to_row) = to;
@@ -173,46 +164,342 @@ impl Board {
 
         // 获取起始位置的棋子
         let moving_piece = self.get_fen(from_col, from_row);
+        let piece_type = match PieceType::from_fen(moving_piece) {
+            Some(pt) => pt,
+            None => return false,
+        };
+        let side = match Side::from_fen(moving_piece) {
+            Some(s) => s,
+            None => return false,
+        };
+        let is_red = side == Side::Red;
 
-        // 检查目标位置
+        // 检查目标位置 - 不能吃己方棋子
         let target_piece = self.get_fen(to_col, to_row);
-
         if target_piece != '.' {
-            // 目标位置有棋子
-            // 检查是否为敌方棋子（通过大小写判断）
-            let moving_is_lower = moving_piece.is_lowercase();
-            let target_is_lower = target_piece.is_lowercase();
-
-            // 相同颜色不能吃子
-            if moving_is_lower == target_is_lower {
+            let target_side = match Side::from_fen(target_piece) {
+                Some(s) => s,
+                None => return false,
+            };
+            if side == target_side {
                 return false;
             }
+        }
 
-            // 检查是否为炮的特殊吃子规则（需要炮架）
-            let is_cannon = moving_piece.eq_ignore_ascii_case(&'c');
-            if is_cannon {
-                // 炮的吃子需要中间有一个炮架
-                if !self.has_cannon_screen(from_col, from_row, to_col, to_row) {
-                    return false;
-                }
+        // 根据棋子类型验证走法
+        let valid = match piece_type {
+            PieceType::King => self.validate_king_move(from_col, from_row, to_col, to_row, is_red),
+            PieceType::Advisor => {
+                self.validate_advisor_move(from_col, from_row, to_col, to_row, is_red)
+            }
+            PieceType::Elephant => {
+                self.validate_elephant_move(from_col, from_row, to_col, to_row, is_red)
+            }
+            PieceType::Knight => self.validate_knight_move(from_col, from_row, to_col, to_row),
+            PieceType::Rook => self.validate_rook_move(from_col, from_row, to_col, to_row),
+            PieceType::Cannon => {
+                self.validate_cannon_move(from_col, from_row, to_col, to_row, target_piece != '.')
+            }
+            PieceType::Pawn => self.validate_pawn_move(from_col, from_row, to_col, to_row, is_red),
+        };
+
+        if !valid {
+            return false;
+        }
+
+        // 执行走法（临时）
+        self.squares[to_row][to_col] = moving_piece;
+        self.squares[from_row][from_col] = '.';
+
+        // 检查飞将规则（将帅不能照面）
+        if self.kings_are_facing() {
+            // 撤销走法
+            self.squares[from_row][from_col] = moving_piece;
+            self.squares[to_row][to_col] = target_piece;
+            return false;
+        }
+
+        true
+    }
+
+    /// Validate King (将/帅) movement
+    /// - Must stay within palace
+    /// - Moves exactly one step orthogonally
+    fn validate_king_move(
+        &self,
+        from_col: usize,
+        from_row: usize,
+        to_col: usize,
+        to_row: usize,
+        is_red: bool,
+    ) -> bool {
+        // Must stay within palace columns (3,4,5)
+        if !(3..=5).contains(&to_col) {
+            return false;
+        }
+        // Red palace: rows 0-2, Black palace: rows 7-9
+        if is_red {
+            if to_row > 2 {
+                return false;
             }
         } else {
-            // 目标位置为空
-            // 如果是炮，移动到空位置时不能有炮架
-            let is_cannon = moving_piece.eq_ignore_ascii_case(&'c');
-            if is_cannon {
-                // 炮移动时空位不能有炮架
-                if self.has_pieces_between(from_col, from_row, to_col, to_row) {
-                    return false;
+            if to_row < 7 {
+                return false;
+            }
+        }
+        // Must move exactly one step
+        let dx = (to_col as isize - from_col as isize).abs();
+        let dy = (to_row as isize - from_row as isize).abs();
+        dx + dy == 1
+    }
+
+    /// Validate Advisor (士/仕) movement
+    /// - Must stay within palace
+    /// - Moves exactly one step diagonally
+    fn validate_advisor_move(
+        &self,
+        from_col: usize,
+        from_row: usize,
+        to_col: usize,
+        to_row: usize,
+        is_red: bool,
+    ) -> bool {
+        // Must stay within palace columns (3,4,5)
+        if !(3..=5).contains(&to_col) {
+            return false;
+        }
+        // Must stay within palace rows
+        if is_red {
+            if to_row > 2 {
+                return false;
+            }
+        } else {
+            if to_row < 7 {
+                return false;
+            }
+        }
+        // Must move exactly one step diagonally
+        let dx = (to_col as isize - from_col as isize).abs();
+        let dy = (to_row as isize - from_row as isize).abs();
+        dx == 1 && dy == 1
+    }
+
+    /// Validate Elephant (象/相) movement
+    /// - Moves in 田 pattern (2 steps diagonally)
+    /// - Cannot cross river
+    /// - Can be blocked (蹩脚) at the center of 田
+    fn validate_elephant_move(
+        &self,
+        from_col: usize,
+        from_row: usize,
+        to_col: usize,
+        to_row: usize,
+        is_red: bool,
+    ) -> bool {
+        let dx = to_col as isize - from_col as isize;
+        let dy = to_row as isize - from_row as isize;
+
+        // Must move exactly 2 steps diagonally (田)
+        if dx.abs() != 2 || dy.abs() != 2 {
+            return false;
+        }
+
+        // Cannot cross river: Red must stay in rows 0-4, Black must stay in rows 5-9
+        if is_red && to_row > 4 {
+            return false;
+        }
+        if !is_red && to_row < 5 {
+            return false;
+        }
+
+        // Check for blocking piece at the center of 田
+        let block_col = from_col as isize + dx / 2;
+        let block_row = from_row as isize + dy / 2;
+        if self.squares[block_row as usize][block_col as usize] != '.' {
+            return false;
+        }
+
+        true
+    }
+
+    /// Validate Knight (马) movement
+    /// - Moves in 日 pattern (one step orthogonally, then one step diagonally)
+    /// - Can be blocked (蹩脚) at the first step
+    fn validate_knight_move(
+        &self,
+        from_col: usize,
+        from_row: usize,
+        to_col: usize,
+        to_row: usize,
+    ) -> bool {
+        let dx = to_col as isize - from_col as isize;
+        let dy = to_row as isize - from_row as isize;
+        let abs_dx = dx.abs();
+        let abs_dy = dy.abs();
+
+        // Must move in 日 pattern: 1x2 or 2x1
+        if !((abs_dx == 1 && abs_dy == 2) || (abs_dx == 2 && abs_dy == 1)) {
+            return false;
+        }
+
+        // Check for blocking piece
+        if abs_dx == 2 {
+            // Horizontal 日, block is at adjacent horizontal position
+            let block_col = from_col as isize + dx / 2;
+            let block_row = from_row as isize;
+            if self.squares[block_row as usize][block_col as usize] != '.' {
+                return false;
+            }
+        } else {
+            // Vertical 日, block is at adjacent vertical position
+            let block_col = from_col as isize;
+            let block_row = from_row as isize + dy / 2;
+            if self.squares[block_row as usize][block_col as usize] != '.' {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Validate Rook (车) movement
+    /// - Moves in straight lines (horizontal or vertical)
+    /// - Cannot jump over pieces
+    fn validate_rook_move(
+        &self,
+        from_col: usize,
+        from_row: usize,
+        to_col: usize,
+        to_row: usize,
+    ) -> bool {
+        let dx = to_col as isize - from_col as isize;
+        let dy = to_row as isize - from_row as isize;
+
+        // Must move in straight line
+        if dx != 0 && dy != 0 {
+            return false;
+        }
+
+        // Cannot jump over pieces
+        !self.has_pieces_between(from_col, from_row, to_col, to_row)
+    }
+
+    /// Validate Cannon (炮) movement
+    /// - Moves in straight lines like Rook
+    /// - Capturing requires exactly one piece between (炮架)
+    fn validate_cannon_move(
+        &self,
+        from_col: usize,
+        from_row: usize,
+        to_col: usize,
+        to_row: usize,
+        is_capturing: bool,
+    ) -> bool {
+        let dx = to_col as isize - from_col as isize;
+        let dy = to_row as isize - from_row as isize;
+
+        // Must move in straight line
+        if dx != 0 && dy != 0 {
+            return false;
+        }
+
+        if is_capturing {
+            // Capturing requires exactly one piece between
+            self.has_cannon_screen(from_col, from_row, to_col, to_row)
+        } else {
+            // Moving without capturing: no pieces between
+            !self.has_pieces_between(from_col, from_row, to_col, to_row)
+        }
+    }
+
+    /// Validate Pawn (兵/卒) movement
+    /// - Before crossing river: can only move forward one step
+    /// - After crossing river: can move forward, left, or right one step
+    fn validate_pawn_move(
+        &self,
+        from_col: usize,
+        from_row: usize,
+        to_col: usize,
+        to_row: usize,
+        is_red: bool,
+    ) -> bool {
+        let dx = to_col as isize - from_col as isize;
+        let dy = to_row as isize - from_row as isize;
+        let abs_dx = dx.abs();
+        let abs_dy = dy.abs();
+
+        // Must move exactly one step
+        if abs_dx + abs_dy != 1 {
+            return false;
+        }
+
+        let crossed_river = Self::is_across_river(from_row, is_red);
+
+        if is_red {
+            // Red pawns move upward (increasing row)
+            if !crossed_river {
+                // Before river: only forward
+                dy == 1 && dx == 0
+            } else {
+                // After river: forward, left, or right (but not backward)
+                dy >= 0
+            }
+        } else {
+            // Black pawns move downward (decreasing row)
+            if !crossed_river {
+                // Before river: only forward
+                dy == -1 && dx == 0
+            } else {
+                // After river: forward, left, or right (but not backward)
+                dy <= 0
+            }
+        }
+    }
+
+    /// Check if kings are facing each other (飞将规则)
+    /// Kings on the same column with no pieces between them is illegal
+    fn kings_are_facing(&self) -> bool {
+        let mut red_king_pos: Option<(usize, usize)> = None;
+        let mut black_king_pos: Option<(usize, usize)> = None;
+
+        // Find both kings
+        for row in 0..10 {
+            for col in 0..9 {
+                let fen = self.squares[row][col];
+                if fen == 'k' {
+                    red_king_pos = Some((col, row));
+                } else if fen == 'K' {
+                    black_king_pos = Some((col, row));
                 }
             }
         }
 
-        // 执行走法
-        self.squares[to_row][to_col] = moving_piece;
-        self.squares[from_row][from_col] = '.';
+        // Both kings must exist
+        let (red_col, red_row) = match red_king_pos {
+            Some(p) => p,
+            None => return false,
+        };
+        let (black_col, black_row) = match black_king_pos {
+            Some(p) => p,
+            None => return false,
+        };
 
-        true
+        // Must be on the same column
+        if red_col != black_col {
+            return false;
+        }
+
+        // Check if there are any pieces between them
+        let min_row = red_row.min(black_row) + 1;
+        let max_row = red_row.max(black_row);
+
+        for row in min_row..max_row {
+            if self.squares[row][red_col] != '.' {
+                return false; // There's a piece between, so not facing
+            }
+        }
+
+        true // Kings are facing with no pieces between
     }
 
     /// 检查炮是否有炮架（用于吃子）
@@ -285,6 +572,41 @@ impl Board {
         false
     }
 
+    /// Count the number of pieces between two positions (exclusive)
+    /// Returns 0 if not on the same row/column
+    pub fn count_pieces_between(
+        &self,
+        from_col: usize,
+        from_row: usize,
+        to_col: usize,
+        to_row: usize,
+    ) -> usize {
+        let dx = to_col as isize - from_col as isize;
+        let dy = to_row as isize - from_row as isize;
+
+        // Must be on same row or column
+        if dx != 0 && dy != 0 {
+            return 0;
+        }
+
+        let step_x = if dx == 0 { 0 } else { dx / dx.abs() };
+        let step_y = if dy == 0 { 0 } else { dy / dy.abs() };
+
+        let mut x = from_col as isize + step_x;
+        let mut y = from_row as isize + step_y;
+        let mut count = 0;
+
+        while x != to_col as isize || y != to_row as isize {
+            if self.squares[y as usize][x as usize] != '.' {
+                count += 1;
+            }
+            x += step_x;
+            y += step_y;
+        }
+
+        count
+    }
+
     /// Get the FEN character at a specific position
     pub fn get_fen(&self, col: usize, row: usize) -> char {
         self.squares[row][col]
@@ -295,10 +617,10 @@ impl Board {
         self.squares[row][col] = fen_char;
     }
 
-    /// Check if a position contains a piece of specific color
-    pub fn is_color_at(&self, col: usize, row: usize, color: Color) -> bool {
+    /// Check if a position contains a piece of specific side
+    pub fn is_color_at(&self, col: usize, row: usize, side: Side) -> bool {
         let fen_char = self.get_fen(col, row);
-        color.matches_fen(fen_char)
+        side.matches_fen(fen_char)
     }
 
     /// Get the piece type at a specific position
@@ -307,17 +629,17 @@ impl Board {
         PieceType::from_fen(fen_char)
     }
 
-    /// Get the color at a specific position
-    pub fn get_color_at(&self, col: usize, row: usize) -> Option<Color> {
+    /// Get the side at a specific position
+    pub fn get_color_at(&self, col: usize, row: usize) -> Option<Side> {
         let fen_char = self.get_fen(col, row);
-        Color::from_fen(fen_char)
+        Side::from_fen(fen_char)
     }
 
-    /// Get the FEN character and color at a position
-    pub fn get_fen_and_color(&self, col: usize, row: usize) -> (char, Option<Color>) {
+    /// Get the FEN character and side at a position
+    pub fn get_fen_and_color(&self, col: usize, row: usize) -> (char, Option<Side>) {
         let fen_char = self.get_fen(col, row);
-        let color = Color::from_fen(fen_char);
-        (fen_char, color)
+        let side = Side::from_fen(fen_char);
+        (fen_char, side)
     }
 
     /// Check if a position is empty
@@ -467,25 +789,25 @@ impl Board {
         dx + dy
     }
 
-    /// Get piece at position with type and color (通用方法)
-    pub fn get_piece_at(&self, col: usize, row: usize) -> Option<(PieceType, Color)> {
+    /// Get piece at position with type and side (通用方法)
+    pub fn get_piece_at(&self, col: usize, row: usize) -> Option<(PieceType, Side)> {
         let fen_char = self.get_fen(col, row);
         if fen_char == '.' {
             return None;
         }
 
         let piece_type = PieceType::from_fen(fen_char)?;
-        let color = Color::from_fen(fen_char)?;
+        let side = Side::from_fen(fen_char)?;
 
-        Some((piece_type, color))
+        Some((piece_type, side))
     }
 
     /// Set piece at position (通用方法)
-    pub fn set_piece_at(&mut self, col: usize, row: usize, piece_type: PieceType, color: Color) {
-        let fen_char = match color {
-            Color::Red => piece_type.to_fen_base(),
-            Color::Black => piece_type.to_fen_base().to_ascii_uppercase(),
-            Color::Any => '.', // Should not happen
+    pub fn set_piece_at(&mut self, col: usize, row: usize, piece_type: PieceType, side: Side) {
+        let fen_char = match side {
+            Side::Black => piece_type.to_fen_base(),
+            Side::Red => piece_type.to_fen_base().to_ascii_uppercase(),
+            Side::Any => '.', // Should not happen
         };
         self.set_fen(col, row, fen_char);
     }
@@ -493,6 +815,19 @@ impl Board {
     /// Remove piece at position (通用方法)
     pub fn remove_piece_at(&mut self, col: usize, row: usize) {
         self.set_fen(col, row, '.');
+    }
+
+    /// Pop piece at position: get and remove the piece, returning its info
+    /// Returns (fen_char, piece_type, side) if a piece was present, None if empty
+    pub fn pop_piece_at(&mut self, col: usize, row: usize) -> Option<(char, PieceType, Side)> {
+        let fen_char = self.get_fen(col, row);
+        if fen_char == '.' {
+            return None;
+        }
+        let piece_type = PieceType::from_fen(fen_char)?;
+        let side = Side::from_fen(fen_char)?;
+        self.remove_piece_at(col, row);
+        Some((fen_char, piece_type, side))
     }
 
     /// 生成走法文本表示
@@ -526,7 +861,7 @@ impl Board {
                 };
                 Ok(notation.to_chinese(locale))
             }
-            MoveFormat::Compact => Ok(notation.to_compact()),
+            MoveFormat::WXF => Ok(notation.to_wxf()),
             MoveFormat::ICCS => Ok(notation.to_iccs(from, to)),
         }
     }
@@ -543,7 +878,6 @@ impl Board {
     /// 翻转棋盘视角（用于测试）
     pub fn flip_perspective(&self) -> Board {
         let mut flipped = Board::new();
-        flipped.clear();
 
         for row in 0..10 {
             for col in 0..9 {
@@ -564,7 +898,8 @@ mod tests {
 
     #[test]
     fn test_move_text_chinese() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试红方车九进一（简体中文）
         let result = board.move_text((0, 0), (0, 1), MoveFormat::Chinese, false);
@@ -597,7 +932,8 @@ mod tests {
 
     #[test]
     fn test_move_text_black() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试黑方车9进1（注意：黑方使用全角数字）
         let result = board.move_text((0, 9), (0, 8), MoveFormat::Chinese, false);
@@ -616,34 +952,35 @@ mod tests {
     }
 
     #[test]
-    fn test_move_text_compact() {
-        let board = Board::new();
+    fn test_move_text_wxf() {
+        let mut board = Board::new();
+        board.initial_position();
 
-        // 测试紧凑格式：红方车九进一
-        let result = board.move_text((0, 0), (0, 1), MoveFormat::Compact, false);
+        // 测试WXF格式：红方车九进一
+        let result = board.move_text((0, 0), (0, 1), MoveFormat::WXF, false);
         assert!(result.is_ok());
         let text = result.unwrap();
-        println!("紧凑格式（红车）: {}", text);
+        println!("WXF格式（红车）: {}", text);
         assert_eq!(text, "R9+1");
 
-        // 测试紧凑格式：黑方车9进1
-        let result = board.move_text((0, 9), (0, 8), MoveFormat::Compact, false);
+        // 测试WXF格式：黑方车9进1
+        let result = board.move_text((0, 9), (0, 8), MoveFormat::WXF, false);
         assert!(result.is_ok());
         let text = result.unwrap();
-        println!("紧凑格式（黑车）: {}", text);
-        assert_eq!(text, "r9+1");
+        println!("WXF格式（黑车）: {}", text);
 
-        // 测试紧凑格式：红方炮二平五
-        let result = board.move_text((7, 2), (4, 2), MoveFormat::Compact, false);
+        // 测试WXF格式：红方炮二平五
+        let result = board.move_text((7, 2), (4, 2), MoveFormat::WXF, false);
         assert!(result.is_ok());
         let text = result.unwrap();
-        println!("紧凑格式（红炮）: {}", text);
-        assert_eq!(text, "C2=5");
+        println!("WXF格式（红炮）: {}", text);
+        assert_eq!(text, "C2.5");
     }
 
     #[test]
     fn test_move_text_iccs() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试ICCS格式（车九进一）
         let result = board.move_text((0, 0), (0, 1), MoveFormat::ICCS, false);
@@ -677,7 +1014,8 @@ mod tests {
 
     #[test]
     fn test_move_notation_method() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试move_notation方法
         let result = board.move_notation((0, 0), (0, 1));
@@ -685,7 +1023,7 @@ mod tests {
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Rook);
-        assert_eq!(notation.piece_color, Color::Red);
+        assert_eq!(notation.piece_color, Side::Black);
         assert_eq!(notation.column, 9);
         assert_eq!(notation.direction, Direction::Forward);
         assert_eq!(notation.distance, 1);
@@ -693,7 +1031,8 @@ mod tests {
 
     #[test]
     fn test_flip_perspective() {
-        let board = Board::new();
+        let mut board = Board::new();
+        board.initial_position();
 
         // 测试棋盘翻转
         let flipped = board.flip_perspective();

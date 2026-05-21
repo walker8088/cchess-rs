@@ -1,6 +1,6 @@
 /// Move generation module for Chinese Chess
 use crate::board::Board;
-use crate::pieces::{Color, PieceType};
+use crate::pieces::{PieceType, Side};
 
 /// Represents a move
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,15 +42,15 @@ impl Move {
     }
 }
 
-/// Generate all legal moves for a given color
-pub fn generate_moves(board: &Board, color: Color) -> Vec<Move> {
+/// Generate all legal moves for a given side
+pub fn generate_moves(board: &Board, side: Side) -> Vec<Move> {
     let mut moves = Vec::new();
 
     for row in 0..10 {
         for col in 0..9 {
-            if board.is_color_at(col, row, color) {
+            if board.is_color_at(col, row, side) {
                 if let Some(piece_type) = board.get_piece_type(col, row) {
-                    let piece_moves = generate_piece_moves(board, piece_type, color, col, row);
+                    let piece_moves = generate_piece_moves(board, piece_type, side, col, row);
                     moves.extend(piece_moves);
                 }
             }
@@ -64,23 +64,23 @@ pub fn generate_moves(board: &Board, color: Color) -> Vec<Move> {
 pub fn generate_piece_moves(
     board: &Board,
     piece_type: PieceType,
-    color: Color,
+    side: Side,
     col: usize,
     row: usize,
 ) -> Vec<Move> {
     match piece_type {
-        PieceType::King => generate_king_moves(board, color, col, row),
-        PieceType::Advisor => generate_advisor_moves(board, color, col, row),
-        PieceType::Elephant => generate_elephant_moves(board, color, col, row),
-        PieceType::Knight => generate_knight_moves(board, color, col, row),
-        PieceType::Rook => generate_rook_moves(board, color, col, row),
-        PieceType::Cannon => generate_cannon_moves(board, color, col, row),
-        PieceType::Pawn => generate_pawn_moves(board, color, col, row),
+        PieceType::King => generate_king_moves(board, side, col, row),
+        PieceType::Advisor => generate_advisor_moves(board, side, col, row),
+        PieceType::Elephant => generate_elephant_moves(board, side, col, row),
+        PieceType::Knight => generate_knight_moves(board, side, col, row),
+        PieceType::Rook => generate_rook_moves(board, side, col, row),
+        PieceType::Cannon => generate_cannon_moves(board, side, col, row),
+        PieceType::Pawn => generate_pawn_moves(board, side, col, row),
     }
 }
 
 /// Generate moves for the King (将/帅)
-fn generate_king_moves(board: &Board, color: Color, col: usize, row: usize) -> Vec<Move> {
+fn generate_king_moves(board: &Board, side: Side, col: usize, row: usize) -> Vec<Move> {
     let mut moves = Vec::new();
     let directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]; // Up, Down, Right, Left
 
@@ -90,10 +90,10 @@ fn generate_king_moves(board: &Board, color: Color, col: usize, row: usize) -> V
 
         // General must stay within the palace
         if (3..=5).contains(&new_col)
-            && ((color == Color::Red && (0..=2).contains(&new_row))
-                || (color == Color::Black && (7..=9).contains(&new_row)))
+            && ((side == Side::Red && (0..=2).contains(&new_row))
+                || (side == Side::Black && (7..=9).contains(&new_row)))
         {
-            if let Some(m) = try_move(board, color, col, row, new_col as usize, new_row as usize) {
+            if let Some(m) = try_move(board, side, col, row, new_col as usize, new_row as usize) {
                 moves.push(m);
             }
         }
@@ -103,7 +103,7 @@ fn generate_king_moves(board: &Board, color: Color, col: usize, row: usize) -> V
 }
 
 /// Generate moves for the Advisor (士/仕)
-fn generate_advisor_moves(board: &Board, color: Color, col: usize, row: usize) -> Vec<Move> {
+fn generate_advisor_moves(board: &Board, side: Side, col: usize, row: usize) -> Vec<Move> {
     let mut moves = Vec::new();
     let directions = [(1, 1), (1, -1), (-1, 1), (-1, -1)]; // Diagonal
 
@@ -113,10 +113,10 @@ fn generate_advisor_moves(board: &Board, color: Color, col: usize, row: usize) -
 
         // Advisor must stay within the palace
         if (3..=5).contains(&new_col)
-            && ((color == Color::Red && (0..=2).contains(&new_row))
-                || (color == Color::Black && (7..=9).contains(&new_row)))
+            && ((side == Side::Red && (0..=2).contains(&new_row))
+                || (side == Side::Black && (7..=9).contains(&new_row)))
         {
-            if let Some(m) = try_move(board, color, col, row, new_col as usize, new_row as usize) {
+            if let Some(m) = try_move(board, side, col, row, new_col as usize, new_row as usize) {
                 moves.push(m);
             }
         }
@@ -126,7 +126,7 @@ fn generate_advisor_moves(board: &Board, color: Color, col: usize, row: usize) -
 }
 
 /// Generate moves for the Elephant (象/相)
-fn generate_elephant_moves(board: &Board, color: Color, col: usize, row: usize) -> Vec<Move> {
+fn generate_elephant_moves(board: &Board, side: Side, col: usize, row: usize) -> Vec<Move> {
     let mut moves = Vec::new();
     let directions = [(2, 2), (2, -2), (-2, 2), (-2, -2)]; // Diagonal 2 squares
     let blocks = [(1, 1), (1, -1), (-1, 1), (-1, -1)]; // Blocking points
@@ -142,21 +142,20 @@ fn generate_elephant_moves(board: &Board, color: Color, col: usize, row: usize) 
         // Elephant cannot cross the river
         // Red elephant: rows 0-4, Black elephant: rows 5-9
         if (0..=8).contains(&new_col) && (0..=9).contains(&new_row) {
-            if color == Color::Red && new_row <= 4 {
+            if side == Side::Red && new_row <= 4 {
                 // Check if the blocking point is empty
                 if board.is_empty_at(block_col as usize, block_row as usize) {
                     if let Some(m) =
-                        try_move(board, color, col, row, new_col as usize, new_row as usize)
+                        try_move(board, side, col, row, new_col as usize, new_row as usize)
                     {
                         moves.push(m);
                     }
                 }
-            } else if color == Color::Black
+            } else if side == Side::Black
                 && new_row >= 5
                 && board.is_empty_at(block_col as usize, block_row as usize)
             {
-                if let Some(m) =
-                    try_move(board, color, col, row, new_col as usize, new_row as usize)
+                if let Some(m) = try_move(board, side, col, row, new_col as usize, new_row as usize)
                 {
                     moves.push(m);
                 }
@@ -168,7 +167,7 @@ fn generate_elephant_moves(board: &Board, color: Color, col: usize, row: usize) 
 }
 
 /// Generate moves for the Knight (马/傌)
-fn generate_knight_moves(board: &Board, color: Color, col: usize, row: usize) -> Vec<Move> {
+fn generate_knight_moves(board: &Board, side: Side, col: usize, row: usize) -> Vec<Move> {
     let mut moves = Vec::new();
     // Horse moves: 2 in one direction, 1 perpendicular (L-shape)
     // With blocking considerations
@@ -192,8 +191,7 @@ fn generate_knight_moves(board: &Board, color: Color, col: usize, row: usize) ->
         if (0..=8).contains(&new_col) && (0..=9).contains(&new_row) {
             // Check if the blocking point is empty
             if board.is_empty_at(block_col as usize, block_row as usize) {
-                if let Some(m) =
-                    try_move(board, color, col, row, new_col as usize, new_row as usize)
+                if let Some(m) = try_move(board, side, col, row, new_col as usize, new_row as usize)
                 {
                     moves.push(m);
                 }
@@ -205,7 +203,7 @@ fn generate_knight_moves(board: &Board, color: Color, col: usize, row: usize) ->
 }
 
 /// Generate moves for the Rook (车/俥)
-fn generate_rook_moves(board: &Board, color: Color, col: usize, row: usize) -> Vec<Move> {
+fn generate_rook_moves(board: &Board, side: Side, col: usize, row: usize) -> Vec<Move> {
     let mut moves = Vec::new();
     let directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]; // Up, Down, Right, Left
 
@@ -214,7 +212,7 @@ fn generate_rook_moves(board: &Board, color: Color, col: usize, row: usize) -> V
         let mut new_row = row as isize + dr;
 
         while (0..=8).contains(&new_col) && (0..=9).contains(&new_row) {
-            if let Some(m) = try_move(board, color, col, row, new_col as usize, new_row as usize) {
+            if let Some(m) = try_move(board, side, col, row, new_col as usize, new_row as usize) {
                 let is_capture = m.captured.is_some();
                 moves.push(m);
                 if is_capture {
@@ -232,7 +230,7 @@ fn generate_rook_moves(board: &Board, color: Color, col: usize, row: usize) -> V
 }
 
 /// Generate moves for the Cannon (炮/砲)
-fn generate_cannon_moves(board: &Board, color: Color, col: usize, row: usize) -> Vec<Move> {
+fn generate_cannon_moves(board: &Board, side: Side, col: usize, row: usize) -> Vec<Move> {
     let mut moves = Vec::new();
     let directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]; // Up, Down, Right, Left
 
@@ -249,7 +247,7 @@ fn generate_cannon_moves(board: &Board, color: Color, col: usize, row: usize) ->
                 } else {
                     // Can move to empty square
                     if let Some(m) =
-                        try_move(board, color, col, row, new_col as usize, new_row as usize)
+                        try_move(board, side, col, row, new_col as usize, new_row as usize)
                     {
                         moves.push(m);
                     }
@@ -258,10 +256,10 @@ fn generate_cannon_moves(board: &Board, color: Color, col: usize, row: usize) ->
                 // After jumping, can only capture
                 if board.has_piece_at(new_col as usize, new_row as usize) {
                     let target_fen = board.get_fen(new_col as usize, new_row as usize);
-                    if let Some(target_color) = Color::from_fen(target_fen) {
-                        if target_color != color {
+                    if let Some(target_side) = Side::from_fen(target_fen) {
+                        if target_side != side {
                             if let Some(m) =
-                                try_move(board, color, col, row, new_col as usize, new_row as usize)
+                                try_move(board, side, col, row, new_col as usize, new_row as usize)
                             {
                                 moves.push(m);
                             }
@@ -279,12 +277,12 @@ fn generate_cannon_moves(board: &Board, color: Color, col: usize, row: usize) ->
 }
 
 /// Generate moves for the Pawn (卒/兵)
-fn generate_pawn_moves(board: &Board, color: Color, col: usize, row: usize) -> Vec<Move> {
+fn generate_pawn_moves(board: &Board, side: Side, col: usize, row: usize) -> Vec<Move> {
     let mut moves = Vec::new();
 
     // Pawn moves forward before crossing river, forward/sideways after
-    let forward = if color == Color::Red { 1 } else { -1 };
-    let crossed_river = if color == Color::Red {
+    let forward = if side == Side::Red { 1 } else { -1 };
+    let crossed_river = if side == Side::Red {
         row >= 5
     } else {
         row <= 4
@@ -294,7 +292,7 @@ fn generate_pawn_moves(board: &Board, color: Color, col: usize, row: usize) -> V
     let new_col = col as isize;
     let new_row = row as isize + forward;
     if (0..=9).contains(&new_row) {
-        if let Some(m) = try_move(board, color, col, row, new_col as usize, new_row as usize) {
+        if let Some(m) = try_move(board, side, col, row, new_col as usize, new_row as usize) {
             moves.push(m);
         }
     }
@@ -305,8 +303,7 @@ fn generate_pawn_moves(board: &Board, color: Color, col: usize, row: usize) -> V
             let new_col = col as isize + dc;
             let new_row = row as isize;
             if (0..=8).contains(&new_col) {
-                if let Some(m) =
-                    try_move(board, color, col, row, new_col as usize, new_row as usize)
+                if let Some(m) = try_move(board, side, col, row, new_col as usize, new_row as usize)
                 {
                     moves.push(m);
                 }
@@ -320,7 +317,7 @@ fn generate_pawn_moves(board: &Board, color: Color, col: usize, row: usize) -> V
 /// Try to make a move, returns Some(Move) if valid, None otherwise
 pub fn try_move(
     board: &Board,
-    color: Color,
+    side: Side,
     from_col: usize,
     from_row: usize,
     to_col: usize,
@@ -330,8 +327,8 @@ pub fn try_move(
 
     if target_fen != '.' {
         // There is a piece at the target square
-        if let Some(target_color) = Color::from_fen(target_fen) {
-            if target_color == color {
+        if let Some(target_side) = Side::from_fen(target_fen) {
+            if target_side == side {
                 return None; // Cannot capture own piece
             }
             // Capture enemy piece
