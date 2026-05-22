@@ -15,6 +15,7 @@ Cargo.lock
 
 # Environment variables
 .env
+.venv/
 
 # IDE files
 .vscode/
@@ -33,3 +34,10 @@ Thumbs.db
 
 # Rust documentation
 /doc/
+
+# Engine binaries (too large for git)
+engine/
+
+# Python cache
+tests/__pycache__/
+*.pyc

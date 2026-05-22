@@ -97,31 +97,20 @@ impl MoveNotation {
         }
 
         // 根据颜色应用棋盘翻转（仅用于方向计算）
-        // 关键：翻转后统一使用红方视角处理方向
+        // 内部坐标系已与 ICCS 对齐 (row 0 = 红方底线)，无需翻转
         let (src_col_for_dir, src_row_for_dir, dst_col_for_dir, dst_row_for_dir) =
-            if color == Side::Red {
-                // 黑方走子：反转棋盘一次，然后用红方逻辑处理方向
-                (
-                    flip_coordinate(from_col, from_row).0,
-                    flip_coordinate(from_col, from_row).1,
-                    flip_coordinate(to_col, to_row).0,
-                    flip_coordinate(to_col, to_row).1,
-                )
-            } else {
-                // 红方走子：不反转
-                (from_col, from_row, to_col, to_row)
-            };
+            (from_col, from_row, to_col, to_row);
 
-        // 计算方向：翻转后统一使用红方规则
+        // 计算方向：直接使用原始坐标
         let direction = calculate_direction(
-            Side::Black,
+            color,
             src_col_for_dir,
             src_row_for_dir,
             dst_col_for_dir,
             dst_row_for_dir,
         );
 
-        // 计算距离：使用翻转后的坐标
+        // 计算距离：使用原始坐标
         let distance = calculate_distance(
             piece_type,
             src_col_for_dir,
@@ -252,12 +241,12 @@ impl MoveNotation {
         result
     }
 
-    /// 转换为ICCS格式
+    /// 将 Move 格式化为 ICCS 字符串 (如 "h0e0")
+    /// ICCS 坐标与内部坐标一致：row 0 = 红方底线
     pub fn to_iccs(&self, from: (usize, usize), to: (usize, usize)) -> String {
         let (from_col, from_row) = from;
         let (to_col, to_row) = to;
 
-        // ICCS格式：字母表示列(a-i)，数字表示行(0-9)
         format!(
             "{}{}{}{}",
             (b'a' + from_col as u8) as char,
@@ -268,7 +257,9 @@ impl MoveNotation {
     }
 }
 
-/// 翻转坐标（棋盘翻转）
+/// 翻转坐标（棋盘视角转换，用于可视化/调试）
+/// 注意：走法记谱已不再使用此函数，内部坐标已与 ICCS 对齐
+#[allow(dead_code)]
 fn flip_coordinate(col: usize, row: usize) -> (usize, usize) {
     (8 - col, 9 - row)
 }
@@ -289,9 +280,9 @@ fn calculate_direction(
     // 列相同：垂直移动
     if src_col == dst_col {
         let is_forward = match color {
-            Side::Black => dst_row > src_row, // lowercase side: upward = forward
-            Side::Red => dst_row < src_row,   // uppercase side: downward = forward
-            Side::Any => dst_row > src_row,   // default lowercase side
+            Side::Black => dst_row < src_row, // Black: decreasing row = forward (toward Red)
+            Side::Red => dst_row > src_row,   // Red: increasing row = forward (toward Black)
+            Side::Any => dst_row < src_row,   // default: Black-like
         };
         if is_forward {
             Direction::Forward
@@ -301,9 +292,9 @@ fn calculate_direction(
     } else {
         // 列和行都不同：斜线移动（马、士、象）
         let is_forward = match color {
-            Side::Black => dst_row > src_row, // lowercase side: upward = forward
-            Side::Red => dst_row < src_row,   // uppercase side: downward = forward
-            Side::Any => dst_row > src_row,   // default lowercase side
+            Side::Black => dst_row < src_row, // Black: decreasing row = forward
+            Side::Red => dst_row > src_row,   // Red: increasing row = forward
+            Side::Any => dst_row < src_row,   // default: Black-like
         };
         if is_forward {
             Direction::Forward
@@ -379,15 +370,16 @@ fn calculate_qualifier(
     }
 
     // 按"从前到后"排序，position 0 = 前，position last = 后
-    // 红方：row 从大到小（靠近对方底线=前，靠近己方底线=后）
-    // 黑方：row 从小到大（靠近对方底线=前，靠近己方底线=后）
+    // 新坐标系 (row 0 = 红方底线):
+    // 红方：row 从小到大（小=靠近己方=后，大=靠近对方=前）
+    // 黑方：row 从大到小（大=靠近己方=后，小=靠近对方=前）
     same_pieces.sort_by(|r1, r2| {
-        if color == Side::Black {
-            // lowercase side: larger row = rear, smaller row = front
-            r2.cmp(r1)
+        if color == Side::Red {
+            // Red: smaller row = rear, larger row = front
+            r2.cmp(r1) // descending: front first
         } else {
-            // uppercase side: smaller row = front, larger row = rear
-            r1.cmp(r2)
+            // Black: larger row = rear, smaller row = front
+            r1.cmp(r2) // ascending: front first
         }
     });
 
@@ -397,7 +389,7 @@ fn calculate_qualifier(
 
     // 重新排序
     all_pieces.sort_by(|r1, r2| {
-        if color == Side::Black {
+        if color == Side::Red {
             r2.cmp(r1)
         } else {
             r1.cmp(r2)
@@ -444,23 +436,23 @@ fn get_piece_name(piece_type: PieceType, color: Side, locale: ChineseLocale) -> 
 /// 获取简体中文棋子名称
 fn simplified_piece_name(piece_type: PieceType, color: Side) -> String {
     match (piece_type, color) {
-        // lowercase side (Black): 帅、仕、相、马、车、炮、兵
-        (PieceType::King, Side::Black) => "帅".to_string(),
-        (PieceType::Advisor, Side::Black) => "仕".to_string(),
-        (PieceType::Elephant, Side::Black) => "相".to_string(),
-        (PieceType::Knight, Side::Black) => "马".to_string(),
-        (PieceType::Rook, Side::Black) => "车".to_string(),
-        (PieceType::Cannon, Side::Black) => "炮".to_string(),
-        (PieceType::Pawn, Side::Black) => "兵".to_string(),
-
-        // uppercase side (Red): 将、士、象、马、车、炮、卒
-        (PieceType::King, Side::Red) => "将".to_string(),
-        (PieceType::Advisor, Side::Red) => "士".to_string(),
-        (PieceType::Elephant, Side::Red) => "象".to_string(),
+        // Red (红方): 帅、仕、相、马、车、炮、兵
+        (PieceType::King, Side::Red) => "帅".to_string(),
+        (PieceType::Advisor, Side::Red) => "仕".to_string(),
+        (PieceType::Elephant, Side::Red) => "相".to_string(),
         (PieceType::Knight, Side::Red) => "马".to_string(),
         (PieceType::Rook, Side::Red) => "车".to_string(),
         (PieceType::Cannon, Side::Red) => "炮".to_string(),
-        (PieceType::Pawn, Side::Red) => "卒".to_string(),
+        (PieceType::Pawn, Side::Red) => "兵".to_string(),
+
+        // Black (黑方): 将、士、象、马、车、炮、卒
+        (PieceType::King, Side::Black) => "将".to_string(),
+        (PieceType::Advisor, Side::Black) => "士".to_string(),
+        (PieceType::Elephant, Side::Black) => "象".to_string(),
+        (PieceType::Knight, Side::Black) => "马".to_string(),
+        (PieceType::Rook, Side::Black) => "车".to_string(),
+        (PieceType::Cannon, Side::Black) => "炮".to_string(),
+        (PieceType::Pawn, Side::Black) => "卒".to_string(),
 
         _ => "?".to_string(),
     }
@@ -469,23 +461,23 @@ fn simplified_piece_name(piece_type: PieceType, color: Side) -> String {
 /// 获取繁体中文棋子名称
 fn traditional_piece_name(piece_type: PieceType, color: Side) -> String {
     match (piece_type, color) {
-        // lowercase side (Black): 帥、仕、相、馬、車、砲、兵
-        (PieceType::King, Side::Black) => "帥".to_string(),
-        (PieceType::Advisor, Side::Black) => "仕".to_string(),
-        (PieceType::Elephant, Side::Black) => "相".to_string(),
-        (PieceType::Knight, Side::Black) => "馬".to_string(),
-        (PieceType::Rook, Side::Black) => "車".to_string(),
-        (PieceType::Cannon, Side::Black) => "砲".to_string(),
-        (PieceType::Pawn, Side::Black) => "兵".to_string(),
-
-        // uppercase side (Red): 將、士、象、傌、俥、砲、卒
-        (PieceType::King, Side::Red) => "將".to_string(),
-        (PieceType::Advisor, Side::Red) => "士".to_string(),
-        (PieceType::Elephant, Side::Red) => "象".to_string(),
-        (PieceType::Knight, Side::Red) => "傌".to_string(),
-        (PieceType::Rook, Side::Red) => "俥".to_string(),
+        // Red (红方): 帥、仕、相、馬、車、砲、兵
+        (PieceType::King, Side::Red) => "帥".to_string(),
+        (PieceType::Advisor, Side::Red) => "仕".to_string(),
+        (PieceType::Elephant, Side::Red) => "相".to_string(),
+        (PieceType::Knight, Side::Red) => "馬".to_string(),
+        (PieceType::Rook, Side::Red) => "車".to_string(),
         (PieceType::Cannon, Side::Red) => "砲".to_string(),
-        (PieceType::Pawn, Side::Red) => "卒".to_string(),
+        (PieceType::Pawn, Side::Red) => "兵".to_string(),
+
+        // Black (黑方): 將、士、象、傌、俥、砲、卒
+        (PieceType::King, Side::Black) => "將".to_string(),
+        (PieceType::Advisor, Side::Black) => "士".to_string(),
+        (PieceType::Elephant, Side::Black) => "象".to_string(),
+        (PieceType::Knight, Side::Black) => "傌".to_string(),
+        (PieceType::Rook, Side::Black) => "俥".to_string(),
+        (PieceType::Cannon, Side::Black) => "砲".to_string(),
+        (PieceType::Pawn, Side::Black) => "卒".to_string(),
 
         _ => "?".to_string(),
     }
@@ -526,15 +518,17 @@ fn direction_to_string(direction: Direction, locale: ChineseLocale) -> String {
 }
 
 /// 格式化数字（根据颜色）
+/// Red (红方) 使用中文数字 (一, 二, 三)
+/// Black (黑方) 使用阿拉伯数字全角形式 (１, ２, ３)
 fn format_number(number: u8, color: Side, locale: ChineseLocale) -> String {
-    if color == Side::Black {
-        // lowercase side: Chinese numerals
+    if color == Side::Red {
+        // Red: Chinese numerals
         match locale {
             ChineseLocale::Simplified => simplified_number(number),
             ChineseLocale::Traditional => traditional_number(number),
         }
     } else {
-        // uppercase side: fullwidth numerals
+        // Black: fullwidth Arabic numerals
         fullwidth_number(number)
     }
 }
@@ -577,6 +571,98 @@ fn fullwidth_number(number: u8) -> String {
     }
 }
 
+/// ICCS 列字符: a=0, b=1, ..., i=8
+const ICCS_COL_CHARS: [char; 9] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
+
+// ===========================================================================
+// ICCS 坐标走法解析与格式化
+// ===========================================================================
+//
+// ICCS (International Computer Chess Society) 记谱法用于中国象棋:
+// - 列: a-i (从左到右)
+// - 行: 0-9 (row 0 = 红方底线, row 9 = 黑方底线)
+// - 格式: "h0e0" (4字符紧凑格式) 或 "h0-e0" (带连字符)
+//
+// Rust 内部坐标与 ICCS 一致:
+// - 列: 0-8
+// - 行: 0-9 (row 0 = 红方底线, row 9 = 黑方底线)
+
+/// 解析 ICCS 格式走法字符串 (如 "h0e2") 为 Move 结构
+///
+/// 支持两种格式:
+/// - 紧凑格式: "h0e2" (4字符)
+/// - 连字符格式: "h0-e2" (5字符)
+pub fn parse_iccs_move(s: &str) -> crate::move_gen::Move {
+    let chars: Vec<char> = s.chars().collect();
+
+    // 跳过连字符 (h0-e2 → h0e2)
+    let compact: String = chars.iter().filter(|&&c| c != '-').collect();
+    let c: Vec<char> = compact.chars().collect();
+
+    if c.len() != 4 {
+        panic!("Invalid ICCS notation '{}': expected 4 characters", s);
+    }
+
+    let from_col = iccs_col_to_index(c[0]).expect("Invalid ICCS column");
+    let from_row = c[1].to_digit(10).expect("Invalid ICCS row") as usize;
+    let to_col = iccs_col_to_index(c[2]).expect("Invalid ICCS column");
+    let to_row = c[3].to_digit(10).expect("Invalid ICCS row") as usize;
+
+    // ICCS 坐标与内部坐标一致，无需转换
+    crate::move_gen::Move::new(from_col, from_row, to_col, to_row)
+}
+
+/// 解析 ICCS 格式走法字符串，返回 Result
+pub fn try_parse_iccs_move(s: &str) -> Result<crate::move_gen::Move, String> {
+    let chars: Vec<char> = s.chars().collect();
+    let compact: String = chars.iter().filter(|&&c| c != '-').collect();
+    let c: Vec<char> = compact.chars().collect();
+
+    if c.len() != 4 {
+        return Err(format!(
+            "Invalid ICCS notation '{}': expected 4 characters",
+            s
+        ));
+    }
+
+    let from_col = iccs_col_to_index(c[0])?;
+    let from_row = c[1].to_digit(10).ok_or("Invalid ICCS row")? as usize;
+    let to_col = iccs_col_to_index(c[2])?;
+    let to_row = c[3].to_digit(10).ok_or("Invalid ICCS row")? as usize;
+
+    // ICCS 坐标与内部坐标一致，无需转换
+    Ok(crate::move_gen::Move::new(
+        from_col, from_row, to_col, to_row,
+    ))
+}
+
+/// 将 Move 格式化为 ICCS 字符串 (如 "h0e0")
+pub fn format_iccs_move(mv: &crate::move_gen::Move) -> String {
+    // ICCS 坐标与内部坐标一致，直接使用
+    let from_row_iccs = mv.from_row.min(9);
+    let to_row_iccs = mv.to_row.min(9);
+    let from_col = ICCS_COL_CHARS[mv.from_col.min(8)];
+    let to_col = ICCS_COL_CHARS[mv.to_col.min(8)];
+    format!("{}{}{}{}", from_col, from_row_iccs, to_col, to_row_iccs)
+}
+
+/// 将 ICCS 列字符转换为索引 (a=0, b=1, ..., i=8)
+fn iccs_col_to_index(c: char) -> Result<usize, String> {
+    match c {
+        'a'..='i' => Ok(c as usize - 'a' as usize),
+        _ => Err(format!("Invalid ICCS column '{}': expected a-i", c)),
+    }
+}
+
+/// 将索引转换为 ICCS 列字符 (0=a, 1=b, ..., 8=i)
+pub fn index_to_iccs_col(col: usize) -> Result<char, String> {
+    if col > 8 {
+        Err(format!("Invalid column index {}: expected 0-8", col))
+    } else {
+        Ok(ICCS_COL_CHARS[col])
+    }
+}
+
 /// 棋子转换为 WXF 格式字母 (统一大写)
 fn piece_to_wxf_letter(piece_type: PieceType) -> char {
     match piece_type {
@@ -604,13 +690,13 @@ mod tests {
 
     #[test]
     fn test_calculate_direction() {
-        // 红方方向
+        // Black direction: forward = decreasing row (toward Red's side)
         assert_eq!(
-            calculate_direction(Side::Black, 0, 0, 0, 1),
+            calculate_direction(Side::Black, 0, 1, 0, 0),
             Direction::Forward
         );
         assert_eq!(
-            calculate_direction(Side::Black, 0, 1, 0, 0),
+            calculate_direction(Side::Black, 0, 0, 0, 1),
             Direction::Backward
         );
         assert_eq!(
@@ -618,13 +704,13 @@ mod tests {
             Direction::Horizontal
         );
 
-        // uppercase side direction
+        // Red direction: forward = increasing row (toward Black's side)
         assert_eq!(
-            calculate_direction(Side::Red, 0, 9, 0, 8),
+            calculate_direction(Side::Red, 0, 8, 0, 9),
             Direction::Forward
         );
         assert_eq!(
-            calculate_direction(Side::Red, 0, 8, 0, 9),
+            calculate_direction(Side::Red, 0, 9, 0, 8),
             Direction::Backward
         );
         assert_eq!(
@@ -650,20 +736,29 @@ mod tests {
     #[test]
     fn test_piece_names() {
         // 测试简体中文棋子名称
-        assert_eq!(simplified_piece_name(PieceType::King, Side::Black), "帅");
-        assert_eq!(simplified_piece_name(PieceType::King, Side::Red), "将");
+        // Red (红方): 帅、仕、相、马、车、炮、兵
+        assert_eq!(simplified_piece_name(PieceType::King, Side::Red), "帅");
+        // Black (黑方): 将、士、象、马、车、炮、卒
+        assert_eq!(simplified_piece_name(PieceType::King, Side::Black), "将");
+        // Both use 车 for rook in simplified
         assert_eq!(simplified_piece_name(PieceType::Rook, Side::Black), "车");
         assert_eq!(simplified_piece_name(PieceType::Rook, Side::Red), "车");
+        // Both use 炮 for cannon in simplified
         assert_eq!(simplified_piece_name(PieceType::Cannon, Side::Black), "炮");
         assert_eq!(simplified_piece_name(PieceType::Cannon, Side::Red), "炮");
-        assert_eq!(simplified_piece_name(PieceType::Pawn, Side::Black), "兵");
-        assert_eq!(simplified_piece_name(PieceType::Pawn, Side::Red), "卒");
+        // Red=兵, Black=卒
+        assert_eq!(simplified_piece_name(PieceType::Pawn, Side::Red), "兵");
+        assert_eq!(simplified_piece_name(PieceType::Pawn, Side::Black), "卒");
 
         // 测试繁体中文棋子名称
-        assert_eq!(traditional_piece_name(PieceType::King, Side::Black), "帥");
-        assert_eq!(traditional_piece_name(PieceType::King, Side::Red), "將");
-        assert_eq!(traditional_piece_name(PieceType::Rook, Side::Black), "車");
-        assert_eq!(traditional_piece_name(PieceType::Rook, Side::Red), "俥");
+        // Red (红方): 帥、仕、相、馬、車、砲、兵
+        assert_eq!(traditional_piece_name(PieceType::King, Side::Red), "帥");
+        // Black (黑方): 將、士、象、傌、俥、砲、卒
+        assert_eq!(traditional_piece_name(PieceType::King, Side::Black), "將");
+        // Red=車, Black=俥
+        assert_eq!(traditional_piece_name(PieceType::Rook, Side::Red), "車");
+        assert_eq!(traditional_piece_name(PieceType::Rook, Side::Black), "俥");
+        // Both use 砲 for cannon in traditional
         assert_eq!(traditional_piece_name(PieceType::Cannon, Side::Black), "砲");
         assert_eq!(traditional_piece_name(PieceType::Cannon, Side::Red), "砲");
     }
@@ -685,26 +780,26 @@ mod tests {
         let mut board = Board::new();
         board.initial_position();
 
-        // 测试红方车九进一
+        // Test Red rook at (0,0) moving forward to (0,1)
+        // Red rooks are at row 0 in the new coordinate system
+        // Column 0 = 9路 (from Red's perspective, right-to-left)
         let result = MoveNotation::from_board_move(&board, (0, 0), (0, 1));
         assert!(result.is_ok());
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Rook);
-        assert_eq!(notation.piece_color, Side::Black);
-        assert_eq!(notation.column, 9); // 九路（最左边）
+        assert_eq!(notation.piece_color, Side::Red);
+        assert_eq!(notation.column, 9); // 九路
         assert_eq!(notation.direction, Direction::Forward);
         assert_eq!(notation.distance, 1);
 
-        // 转换为中文
+        // Red uses Chinese numerals
         let chinese = notation.to_chinese(ChineseLocale::Simplified);
         assert_eq!(chinese, "车九进一");
 
-        // 转换为繁体中文
         let traditional = notation.to_chinese(ChineseLocale::Traditional);
         assert_eq!(traditional, "車九進一");
 
-        // 转换为 WXF 格式
         let wxf = notation.to_wxf();
         assert_eq!(wxf, "R9+1");
     }
@@ -714,23 +809,24 @@ mod tests {
         let mut board = Board::new();
         board.initial_position();
 
-        // 测试黑方车9进1（从(0,9)到(0,8)）
+        // Test Black rook at (0,9) moving forward to (0,8)
+        // Black rooks are at row 9 in the new coordinate system
         let result = MoveNotation::from_board_move(&board, (0, 9), (0, 8));
         assert!(result.is_ok());
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Rook);
-        assert_eq!(notation.piece_color, Side::Red);
-        // 注意：经过翻转后，uppercase side 的车在 lowercase side 视角下是第九路
+        assert_eq!(notation.piece_color, Side::Black);
+        // Column calculation uses original coords (not flipped): 9 - 0 = 9
         assert_eq!(notation.column, 9);
         assert_eq!(notation.direction, Direction::Forward);
         assert_eq!(notation.distance, 1);
 
-        // 转换为中文（黑方使用全角数字）
+        // Black uses full-width Arabic numerals, rook = 车
         let chinese = notation.to_chinese(ChineseLocale::Simplified);
         assert_eq!(chinese, "车９进１");
 
-        // 转换为 WXF 格式（统一大写）
+        // WXF uses uppercase letters for all pieces
         let wxf = notation.to_wxf();
         assert_eq!(wxf, "R9+1");
     }
@@ -740,27 +836,26 @@ mod tests {
         let mut board = Board::new();
         board.initial_position();
 
-        // 测试红方炮二平五（从(7,2)到(4,2)）
-        // 右边的炮在(7,2)，这是二路（从右向左数：9-7=2）
+        // Test Red cannon at (7,2) moving horizontally to (4,2)
+        // Red cannons are at row 2, column 2 and 7
+        // Column 7 = 二路 (from Red's perspective: 9-7=2)
         let result = MoveNotation::from_board_move(&board, (7, 2), (4, 2));
         assert!(result.is_ok());
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Cannon);
-        assert_eq!(notation.piece_color, Side::Black);
-        assert_eq!(notation.column, 2); // 二路（从右向左数）
+        assert_eq!(notation.piece_color, Side::Red);
+        assert_eq!(notation.column, 2); // 二路
         assert_eq!(notation.direction, Direction::Horizontal);
         assert_eq!(notation.distance, 5); // 平到五路
 
-        // 转换为中文
+        // Red uses Chinese numerals
         let chinese = notation.to_chinese(ChineseLocale::Simplified);
         assert_eq!(chinese, "炮二平五");
 
-        // 转换为繁体中文
         let traditional = notation.to_chinese(ChineseLocale::Traditional);
         assert_eq!(traditional, "砲二平五");
 
-        // 转换为 WXF 格式
         let wxf = notation.to_wxf();
         assert_eq!(wxf, "C2.5");
     }
@@ -770,21 +865,20 @@ mod tests {
         let mut board = Board::new();
         board.initial_position();
 
-        // 测试红方马八进七（从(1,0)到(2,2)）
-        // 左边的马在(1,0)，这是八路（从右向左数：9-1=8）
-        // 移动到(2,2)，这是七路（9-2=7）
+        // Test Red knight at (1,0) moving to (2,2)
+        // Red knights are at row 0
+        // Column 1 = 8路 (from Red's perspective: 9-1=8)
         let result = MoveNotation::from_board_move(&board, (1, 0), (2, 2));
         assert!(result.is_ok());
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Knight);
-        assert_eq!(notation.piece_color, Side::Black);
-        assert_eq!(notation.column, 8); // 八路（从右向左数）
+        assert_eq!(notation.piece_color, Side::Red);
+        assert_eq!(notation.column, 8); // 八路
         assert_eq!(notation.direction, Direction::Forward);
-        // 马进到七路，距离应该是目标路数
-        assert_eq!(notation.distance, 7);
+        assert_eq!(notation.distance, 7); // 进到七路
 
-        // 转换为中文（马显示目标路数）
+        // Red uses Chinese numerals
         let chinese = notation.to_chinese(ChineseLocale::Simplified);
         assert_eq!(chinese, "马八进七");
     }
@@ -823,12 +917,13 @@ mod tests {
         let mut board = Board::new();
         board.clear();
         // 红方两车同列（列4），一上一下
-        board.set_fen(4, 1, 'r'); // 后车
-        board.set_fen(4, 3, 'r'); // 前车
-        board.set_fen(4, 9, 'K'); // 黑将
-        board.set_fen(4, 0, 'k'); // 红帅
+        // New coords: row 0 = Red bottom, higher rows = towards Black
+        board.set_fen(4, 1, 'R'); // 后车 (closer to Red's bottom)
+        board.set_fen(4, 3, 'R'); // 前车 (closer to Black's side)
+        board.set_fen(4, 9, 'k'); // 黑将
+        board.set_fen(4, 0, 'K'); // 红帅
 
-        // 前车进一
+        // 前车进一 (forward = increasing row for Red)
         let result = MoveNotation::from_board_move(&board, (4, 3), (4, 4));
         assert!(result.is_ok());
         let notation = result.unwrap();
@@ -850,13 +945,14 @@ mod tests {
         // 创建三个红兵同列的局面（每个兵之间有空位）
         let mut board = Board::new();
         board.clear();
-        board.set_fen(4, 1, 'p'); // 后兵
-        board.set_fen(4, 3, 'p'); // 中兵
-        board.set_fen(4, 5, 'p'); // 前兵
-        board.set_fen(4, 9, 'K'); // 黑将
-        board.set_fen(4, 0, 'k'); // 红帅
+        // New coords: row 0 = Red bottom, higher rows = towards Black
+        board.set_fen(4, 1, 'P'); // 后兵
+        board.set_fen(4, 3, 'P'); // 中兵
+        board.set_fen(4, 5, 'P'); // 前兵
+        board.set_fen(4, 9, 'k'); // 黑将
+        board.set_fen(4, 0, 'K'); // 红帅
 
-        // 前兵进一（从原始位置）
+        // 前兵进一（从原始位置）- Red forward = increasing row
         let notation = MoveNotation::from_board_move(&board, (4, 5), (4, 6)).unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Front));
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "前兵进一");
@@ -880,13 +976,14 @@ mod tests {
         // 创建五个红兵同列的极端局面（全部过河，可以横移）
         let mut board = Board::new();
         board.clear();
-        board.set_fen(3, 0, 'k'); // 红帅（移到旁边）
-        board.set_fen(5, 9, 'K'); // 黑将（移到旁边）
-        board.set_fen(4, 1, 'p'); // 一兵（最后面）
-        board.set_fen(4, 2, 'p'); // 二兵
-        board.set_fen(4, 3, 'p'); // 三兵
-        board.set_fen(4, 4, 'p'); // 四兵
-        board.set_fen(4, 5, 'p'); // 五兵（最前面）
+        // New coords: row 0 = Red bottom
+        board.set_fen(3, 0, 'K'); // 红帅（移到旁边）
+        board.set_fen(5, 9, 'k'); // 黑将（移到旁边）
+        board.set_fen(4, 1, 'P'); // 一兵（最后面）
+        board.set_fen(4, 2, 'P'); // 二兵
+        board.set_fen(4, 3, 'P'); // 三兵
+        board.set_fen(4, 4, 'P'); // 四兵
+        board.set_fen(4, 5, 'P'); // 五兵（最前面）
 
         // 最前面的兵（五兵）= 一兵（数字1），横移测试
         let notation = MoveNotation::from_board_move(&board, (4, 5), (3, 5)).unwrap();
@@ -924,23 +1021,27 @@ mod tests {
         // 创建两辆黑车同列的局面
         let mut board = Board::new();
         board.clear();
-        // 黑方底线是row=9，row小的靠近红方（前），row大的靠近己方（后）
-        board.set_fen(4, 6, 'R'); // 黑方前车（row=6 靠近红方）
-        board.set_fen(4, 8, 'R'); // 黑方后车（row=8 靠近己方）
-        board.set_fen(4, 0, 'K'); // 红帅
-        board.set_fen(4, 9, 'k'); // 黑将
+        // New coords: row 9 = Black top (Black's back rank)
+        // Black forward = decreasing row (towards Red's side)
+        // Lower row = front (closer to Red), higher row = back (closer to Black's back)
+        board.set_fen(4, 1, 'r'); // 黑方前车（row=1 靠近红方 = front）
+        board.set_fen(4, 3, 'r'); // 黑方后车（row=3 靠近己方 = back）
+        board.set_fen(3, 0, 'K'); // 红帅 (moved to col 3 to avoid capture)
+        board.set_fen(5, 9, 'k'); // 黑将 (moved to col 5)
 
-        // 黑方前车进一（row减少=前进）
-        let result = MoveNotation::from_board_move(&board, (4, 6), (4, 5));
+        // 黑方前车进一（row减少=前进 for Black）
+        let result = MoveNotation::from_board_move(&board, (4, 1), (4, 0));
         assert!(result.is_ok());
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Front));
-        // 黑方使用全角数字，WXF格式统一大写
+        // Black uses full-width Arabic numerals, rook = 车
+        // With qualifier: 前/后 + piece name + direction + distance (no file number)
         assert_eq!(notation.to_chinese(ChineseLocale::Simplified), "前车进１");
+        // WXF uses uppercase letters
         assert_eq!(notation.to_wxf(), "+R5+1");
 
         // 黑方后车进一
-        let result = MoveNotation::from_board_move(&board, (4, 8), (4, 7));
+        let result = MoveNotation::from_board_move(&board, (4, 3), (4, 2));
         assert!(result.is_ok());
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Back));
@@ -951,17 +1052,18 @@ mod tests {
     #[test]
     fn test_qualifier_three_black_pawns() {
         // 创建三个黑卒同列的局面（每个卒之间有空位）
-        // 黑方底线是row=9，row小=靠近红方=前，row大=靠近己方=后
+        // New coords: row 9 = Black top (back rank), Black forward = decreasing row
+        // Lower row = front (closer to Red), higher row = back (closer to Black's back)
         let mut board = Board::new();
         board.clear();
         board.set_fen(4, 0, 'K'); // 红帅
         board.set_fen(4, 9, 'k'); // 黑将
-        board.set_fen(4, 3, 'P'); // 黑方前卒（row=3 靠近红方）
-        board.set_fen(4, 5, 'P'); // 黑方中卒
-        board.set_fen(4, 7, 'P'); // 黑方后卒（row=7 靠近己方）
+        board.set_fen(4, 2, 'p'); // 黑方前卒（row=2 靠近红方 = front）
+        board.set_fen(4, 4, 'p'); // 黑方中卒
+        board.set_fen(4, 6, 'p'); // 黑方后卒（row=6 靠近己方 = back）
 
-        // 黑方前卒进一（row减少=前进）
-        let result = MoveNotation::from_board_move(&board, (4, 3), (4, 2));
+        // 黑方前卒进一（row减少=前进 for Black）
+        let result = MoveNotation::from_board_move(&board, (4, 2), (4, 1));
         assert!(result.is_ok(), "前卒进一失败: {:?}", result);
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Front));
@@ -969,7 +1071,7 @@ mod tests {
         assert_eq!(notation.to_wxf(), "+P5+1");
 
         // 黑方中卒进一
-        let result = MoveNotation::from_board_move(&board, (4, 5), (4, 4));
+        let result = MoveNotation::from_board_move(&board, (4, 4), (4, 3));
         assert!(result.is_ok(), "中卒进一失败: {:?}", result);
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Middle));
@@ -977,7 +1079,7 @@ mod tests {
         assert_eq!(notation.to_wxf(), "-P5+1");
 
         // 黑方后卒进一
-        let result = MoveNotation::from_board_move(&board, (4, 7), (4, 6));
+        let result = MoveNotation::from_board_move(&board, (4, 6), (4, 5));
         assert!(result.is_ok(), "后卒进一失败: {:?}", result);
         let notation = result.unwrap();
         assert_eq!(notation.qualifier, Some(Qualifier::Back));
@@ -990,10 +1092,11 @@ mod tests {
         // 创建两个红炮同列的局面
         let mut board = Board::new();
         board.clear();
-        board.set_fen(4, 1, 'c'); // 后炮
-        board.set_fen(4, 3, 'c'); // 前炮
-        board.set_fen(4, 9, 'K'); // 黑将
-        board.set_fen(4, 0, 'k'); // 红帅
+        // New coords: Red forward = increasing row
+        board.set_fen(4, 1, 'C'); // 后炮
+        board.set_fen(4, 3, 'C'); // 前炮
+        board.set_fen(4, 9, 'k'); // 黑将
+        board.set_fen(4, 0, 'K'); // 红帅
 
         // 前炮平六
         let result = MoveNotation::from_board_move(&board, (4, 3), (3, 3));
@@ -1017,10 +1120,11 @@ mod tests {
         // 创建两个红马同列的局面
         let mut board = Board::new();
         board.clear();
-        board.set_fen(3, 1, 'n'); // 后马
-        board.set_fen(3, 3, 'n'); // 前马
-        board.set_fen(4, 9, 'K'); // 黑将
-        board.set_fen(4, 0, 'k'); // 红帅
+        // New coords: Red forward = increasing row
+        board.set_fen(3, 1, 'N'); // 后马
+        board.set_fen(3, 3, 'N'); // 前马
+        board.set_fen(4, 9, 'k'); // 黑将
+        board.set_fen(4, 0, 'K'); // 红帅
 
         // 前马进七（马走日）
         let result = MoveNotation::from_board_move(&board, (3, 3), (2, 5));
@@ -1045,8 +1149,8 @@ mod tests {
         // 测试红方帅移动 - 单个帅，没有限定词
         let mut board = Board::new();
         board.clear();
-        board.set_fen(4, 0, 'k'); // 红帅
-        board.set_fen(3, 9, 'K'); // 黑将（移到旁边避免飞将）
+        board.set_fen(4, 0, 'K'); // 红帅
+        board.set_fen(3, 9, 'k'); // 黑将（移到旁边避免飞将）
 
         // 红帅移动
         let notation = MoveNotation::from_board_move(&board, (4, 0), (4, 1)).unwrap();
@@ -1076,24 +1180,115 @@ mod tests {
 
     #[test]
     fn test_qualifier_traditional_chinese() {
-        // 测试繁体中文限定词
+        // 测试繁体中文限定词 - Red rooks
         let mut board = Board::new();
         board.clear();
-        board.set_fen(4, 1, 'r'); // 后车
-        board.set_fen(4, 3, 'r'); // 前车
-        board.set_fen(4, 9, 'K'); // 黑将
-        board.set_fen(4, 0, 'k'); // 红帅
+        // New coords: row 0 = Red bottom, Red forward = increasing row
+        // Lower row = back (closer to Red's bottom), higher row = front (closer to Black)
+        board.set_fen(4, 1, 'R'); // 后车 (back rook)
+        board.set_fen(4, 3, 'R'); // 前车 (front rook)
+        board.set_fen(4, 9, 'k'); // 黑将
+        board.set_fen(4, 0, 'K'); // 红帅
 
-        // 前车进一（繁体）
+        // 前车进一（繁体）- front rook moves forward (increasing row)
         let result = MoveNotation::from_board_move(&board, (4, 3), (4, 4));
         assert!(result.is_ok());
         let notation = result.unwrap();
+        assert_eq!(notation.qualifier, Some(Qualifier::Front));
+        // Red rook in traditional = 車
         assert_eq!(notation.to_chinese(ChineseLocale::Traditional), "前車進一");
 
-        // 后车进一（繁体）
+        // 后车进一（繁体）- back rook moves forward
         let result = MoveNotation::from_board_move(&board, (4, 1), (4, 2));
         assert!(result.is_ok());
         let notation = result.unwrap();
+        assert_eq!(notation.qualifier, Some(Qualifier::Back));
         assert_eq!(notation.to_chinese(ChineseLocale::Traditional), "後車進一");
+    }
+
+    // =========================================================================
+    // ICCS 坐标走法测试
+    // =========================================================================
+
+    #[test]
+    fn test_parse_iccs_move_basic() {
+        // ICCS "h2e2" → internal row 2 (Red cannon position)
+        let mv = parse_iccs_move("h2e2");
+        assert_eq!(mv.from_col, 7);
+        assert_eq!(mv.from_row, 2);
+        assert_eq!(mv.to_col, 4);
+        assert_eq!(mv.to_row, 2);
+    }
+
+    #[test]
+    fn test_parse_iccs_move_with_hyphen() {
+        // ICCS "h2-e2" → internal row 2 (Red cannon position)
+        let mv = parse_iccs_move("h2-e2");
+        assert_eq!(mv.from_col, 7);
+        assert_eq!(mv.from_row, 2);
+        assert_eq!(mv.to_col, 4);
+        assert_eq!(mv.to_row, 2);
+    }
+
+    #[test]
+    fn test_parse_iccs_move_edges() {
+        // a0 = ICCS col 0, row 0 (Red bottom-left) → internal row 0
+        let mv = parse_iccs_move("a0a1");
+        assert_eq!(mv.from_col, 0);
+        assert_eq!(mv.from_row, 0);
+        assert_eq!(mv.to_col, 0);
+        assert_eq!(mv.to_row, 1);
+    }
+
+    #[test]
+    fn test_parse_iccs_move_invalid() {
+        assert!(try_parse_iccs_move("abc").is_err()); // Too short
+        assert!(try_parse_iccs_move("j0e2").is_err()); // Invalid column
+        assert!(try_parse_iccs_move("hxe2").is_err()); // Invalid row
+    }
+
+    #[test]
+    fn test_format_iccs_move() {
+        // Internal (7,2) → (4,2) → ICCS "h2e2" (Red cannon position)
+        let mv = crate::move_gen::Move::new(7, 2, 4, 2);
+        assert_eq!(format_iccs_move(&mv), "h2e2");
+    }
+
+    #[test]
+    fn test_format_iccs_move_edges() {
+        // Internal (0,0) → (0,1) → ICCS "a0a1" (Red bottom-left)
+        let mv = crate::move_gen::Move::new(0, 0, 0, 1);
+        assert_eq!(format_iccs_move(&mv), "a0a1");
+    }
+
+    #[test]
+    fn test_iccs_col_conversion() {
+        assert_eq!(index_to_iccs_col(0).unwrap(), 'a');
+        assert_eq!(index_to_iccs_col(4).unwrap(), 'e');
+        assert_eq!(index_to_iccs_col(8).unwrap(), 'i');
+        assert!(index_to_iccs_col(9).is_err());
+    }
+
+    #[test]
+    fn test_iccs_roundtrip() {
+        // Verify parse and format are inverse operations
+        let original = "h2e2";
+        let mv = parse_iccs_move(original);
+        assert_eq!(format_iccs_move(&mv), original);
+
+        let original2 = "a0i9";
+        let mv2 = parse_iccs_move(original2);
+        assert_eq!(format_iccs_move(&mv2), original2);
+    }
+
+    #[test]
+    fn test_move_notation_to_iccs() {
+        let mut board = Board::new();
+        board.initial_position();
+
+        // Red cannon move: 炮二平五 from (7,2) to (4,2)
+        let notation = MoveNotation::from_board_move(&board, (7, 2), (4, 2)).unwrap();
+        let iccs = notation.to_iccs((7, 2), (4, 2));
+        assert_eq!(iccs, "h2e2");
     }
 }

@@ -610,9 +610,13 @@ impl XqfFile {
 pub fn board_to_xqf(board: &Board) -> Result<[u8; 90], XqfError> {
     let mut data = [0u8; 90];
 
+    // XQF format: row 0 = Black's back rank, row 9 = Red's back rank
+    // Internal format: row 0 = Red's back rank, row 9 = Black's back rank
+    // So we need to flip rows: xqf_row = 9 - internal_row
     for row in 0..10 {
         for col in 0..9 {
-            let index = row * 9 + col;
+            let xqf_row = 9 - row;
+            let index = xqf_row * 9 + col;
 
             if let Some((piece_type, side)) = board.get_piece_at(col, row) {
                 let code = match (piece_type, side) {
@@ -652,9 +656,11 @@ pub fn board_from_xqf(data: &[u8; 90]) -> Result<Board, XqfError> {
         }
 
         let (col, row) = {
-            let row = i / 9;
+            let xqf_row = i / 9;
             let col = i % 9;
-            (col, row)
+            // XQF row 0 = Black's back rank, internal row 0 = Red's back rank
+            let internal_row = 9 - xqf_row;
+            (col, internal_row)
         };
 
         let (piece_type, side) = match piece_code {

@@ -89,6 +89,8 @@ fn generate_king_moves(board: &Board, side: Side, col: usize, row: usize) -> Vec
         let new_row = row as isize + dr;
 
         // General must stay within the palace
+        // Red (红方) palace: rows 0-2 (bottom)
+        // Black (黑方) palace: rows 7-9 (top)
         if (3..=5).contains(&new_col)
             && ((side == Side::Red && (0..=2).contains(&new_row))
                 || (side == Side::Black && (7..=9).contains(&new_row)))
@@ -112,6 +114,8 @@ fn generate_advisor_moves(board: &Board, side: Side, col: usize, row: usize) -> 
         let new_row = row as isize + dr;
 
         // Advisor must stay within the palace
+        // Red (红方) palace: rows 0-2 (bottom)
+        // Black (黑方) palace: rows 7-9 (top)
         if (3..=5).contains(&new_col)
             && ((side == Side::Red && (0..=2).contains(&new_row))
                 || (side == Side::Black && (7..=9).contains(&new_row)))
@@ -140,7 +144,8 @@ fn generate_elephant_moves(board: &Board, side: Side, col: usize, row: usize) ->
         let block_row = row as isize + br;
 
         // Elephant cannot cross the river
-        // Red elephant: rows 0-4, Black elephant: rows 5-9
+        // Red elephant: rows 0-4 (bottom half)
+        // Black elephant: rows 5-9 (top half)
         if (0..=8).contains(&new_col) && (0..=9).contains(&new_row) {
             if side == Side::Red && new_row <= 4 {
                 // Check if the blocking point is empty
@@ -281,6 +286,9 @@ fn generate_pawn_moves(board: &Board, side: Side, col: usize, row: usize) -> Vec
     let mut moves = Vec::new();
 
     // Pawn moves forward before crossing river, forward/sideways after
+    // Red (红方) starts at rows 0-3, crosses river at row >= 5
+    // Black (黑方) starts at rows 6-9, crosses river at row <= 4
+    // Red moves downward (increasing row), Black moves upward (decreasing row)
     let forward = if side == Side::Red { 1 } else { -1 };
     let crossed_river = if side == Side::Red {
         row >= 5

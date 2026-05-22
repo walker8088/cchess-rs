@@ -95,15 +95,16 @@ fn test_board_make_move() {
     let mut board = Board::new();
     board.initial_position();
 
-    // Test a valid move: red pawn at (0,3) moves forward to (0,4)
-    let from = (0, 3);
-    let to = (0, 4);
+    // Test a valid move: black pawn at (0,6) moves forward to (0,5)
+    // Black pawns are at row 6, move toward row 0 (forward = decreasing row)
+    let from = (0, 6);
+    let to = (0, 5);
 
     assert!(board.make_move(from, to));
 
     // Verify the move was made
-    assert!(board.is_empty_at(0, 3)); // From position should be empty
-    assert!(!board.is_empty_at(0, 4)); // To position should have a piece
+    assert!(board.is_empty_at(0, 6)); // From position should be empty
+    assert!(!board.is_empty_at(0, 5)); // To position should have a piece
 }
 
 #[test]

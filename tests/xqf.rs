@@ -114,20 +114,24 @@ fn test_board_from_xqf() {
     let board = board_result.unwrap();
 
     // Check that positions are correctly set
+    // XQF row 0 (Black King code 1) → internal row 9
+    // XQF row 9 (Red King code 9) → internal row 0
     assert!(board.get_piece_at(4, 0).is_some());
     assert!(board.get_piece_at(4, 9).is_some());
 
     // Check piece types
     if let Some((piece_type, side)) = board.get_piece_at(4, 0) {
         use cchess_rs::pieces::{PieceType, Side};
+        // Internal row 0 = Red's back rank (XQF row 9)
         assert_eq!(piece_type, PieceType::King);
-        assert_eq!(side, Side::Black);
+        assert_eq!(side, Side::Red);
     }
 
     if let Some((piece_type, side)) = board.get_piece_at(4, 9) {
         use cchess_rs::pieces::{PieceType, Side};
+        // Internal row 9 = Black's back rank (XQF row 0)
         assert_eq!(piece_type, PieceType::King);
-        assert_eq!(side, Side::Red);
+        assert_eq!(side, Side::Black);
     }
 }
 

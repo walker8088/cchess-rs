@@ -25,25 +25,25 @@ impl Board {
 
     /// Set up the board with the standard Chinese Chess initial position
     pub fn initial_position(&mut self) {
-        // Black pieces (黑方, top side in board visualization)
-        // Row 0: Rooks, Knights, Elephants, Advisors, King, Advisors, Elephants, Knights, Rooks
-        self.squares[0] = ['r', 'n', 'b', 'a', 'k', 'a', 'b', 'n', 'r'];
-
-        // Row 2: Black cannons (黑方砲)
-        self.squares[2] = ['.', 'c', '.', '.', '.', '.', '.', 'c', '.'];
-
-        // Row 3: Black pawns (黑方卒)
-        self.squares[3] = ['p', '.', 'p', '.', 'p', '.', 'p', '.', 'p'];
-
         // Red pieces (红方, bottom side in board visualization)
-        // Row 6: Red pawns (红方兵)
-        self.squares[6] = ['P', '.', 'P', '.', 'P', '.', 'P', '.', 'P'];
+        // Row 0: Rooks, Knights, Elephants, Advisors, King, Advisors, Elephants, Knights, Rooks
+        self.squares[0] = ['R', 'N', 'B', 'A', 'K', 'A', 'B', 'N', 'R'];
 
-        // Row 7: Red cannons (红方炮)
-        self.squares[7] = ['.', 'C', '.', '.', '.', '.', '.', 'C', '.'];
+        // Row 2: Red cannons (红方炮)
+        self.squares[2] = ['.', 'C', '.', '.', '.', '.', '.', 'C', '.'];
+
+        // Row 3: Red pawns (红方兵)
+        self.squares[3] = ['P', '.', 'P', '.', 'P', '.', 'P', '.', 'P'];
+
+        // Black pieces (黑方, top side in board visualization)
+        // Row 6: Black pawns (黑方卒)
+        self.squares[6] = ['p', '.', 'p', '.', 'p', '.', 'p', '.', 'p'];
+
+        // Row 7: Black cannons (黑方砲)
+        self.squares[7] = ['.', 'c', '.', '.', '.', '.', '.', 'c', '.'];
 
         // Row 9: Rooks, Knights, Elephants, Advisors, King, Advisors, Elephants, Knights, Rooks
-        self.squares[9] = ['R', 'N', 'B', 'A', 'K', 'A', 'B', 'N', 'R'];
+        self.squares[9] = ['r', 'n', 'b', 'a', 'k', 'a', 'b', 'n', 'r'];
     }
 
     /// Create a board from a FEN string
@@ -106,11 +106,13 @@ impl Board {
     }
 
     /// Convert the board to a FEN string
+    /// Standard Xiangqi FEN: Black on top (row 9), Red on bottom (row 0)
     /// Only includes the board position part
     pub fn to_fen(&self) -> String {
         let mut fen_parts = Vec::new();
 
-        for row in 0..10 {
+        // Standard FEN iterates from Black's back rank (row 9) to Red's (row 0)
+        for row in (0..10).rev() {
             let mut fen_row = String::new();
             let mut empty_count = 0;
 
@@ -269,6 +271,8 @@ impl Board {
             return false;
         }
         // Must stay within palace rows
+        // Red (红方) palace: rows 0-2 (bottom)
+        // Black (黑方) palace: rows 7-9 (top)
         if is_red {
             if to_row > 2 {
                 return false;
@@ -436,7 +440,7 @@ impl Board {
         let crossed_river = Self::is_across_river(from_row, is_red);
 
         if is_red {
-            // Red pawns move upward (increasing row)
+            // Red pawns move downward (increasing row, towards Black's side)
             if !crossed_river {
                 // Before river: only forward
                 dy == 1 && dx == 0
@@ -445,7 +449,7 @@ impl Board {
                 dy >= 0
             }
         } else {
-            // Black pawns move downward (decreasing row)
+            // Black pawns move upward (decreasing row, towards Red's side)
             if !crossed_river {
                 // Before river: only forward
                 dy == -1 && dx == 0
@@ -901,7 +905,8 @@ mod tests {
         let mut board = Board::new();
         board.initial_position();
 
-        // 测试红方车九进一（简体中文）
+        // 测试红方车九进一（简体中文）- Red rook at (0,0) moves to (0,1)
+        // Column 0 = 九路 (9 - 0 = 9)
         let result = board.move_text((0, 0), (0, 1), MoveFormat::Chinese, false);
         assert!(result.is_ok());
         let text = result.unwrap();
@@ -915,7 +920,8 @@ mod tests {
         println!("红方车九进一（繁体）: {}", text);
         assert_eq!(text, "車九進一");
 
-        // 测试红方炮二平五
+        // 测试红方炮二平五 - Red cannon at (7,2) moves to (4,2)
+        // Column 7 = 二路 (9 - 7 = 2), to col 4 = 五路
         let result = board.move_text((7, 2), (4, 2), MoveFormat::Chinese, false);
         assert!(result.is_ok());
         let text = result.unwrap();
@@ -935,19 +941,21 @@ mod tests {
         let mut board = Board::new();
         board.initial_position();
 
-        // 测试黑方车9进1（注意：黑方使用全角数字）
+        // 测试黑方车1进1 - Black rook at (0,9) moves to (0,8)
         let result = board.move_text((0, 9), (0, 8), MoveFormat::Chinese, false);
         assert!(result.is_ok());
         let text = result.unwrap();
-        println!("黑方车9进1: {}", text);
-        // 注意：黑方数字应该是全角的，翻转后车是一路
+        println!("黑方车1进1: {}", text);
+        // Black uses 车 for rook (same as Red in simplified), full-width numbers
         assert_eq!(text, "车９进１");
 
-        // 测试黑方炮２平５
+        // 测试黑方炮２平５ - Black cannon at (7,7) moves to (4,7)
+        // Column 7 = 2路 (9-7=2), to col 4 = 5路
         let result = board.move_text((7, 7), (4, 7), MoveFormat::Chinese, false);
         assert!(result.is_ok());
         let text = result.unwrap();
         println!("黑方炮２平５: {}", text);
+        // Black uses full-width numbers: ２平５
         assert_eq!(text, "炮２平５");
     }
 
@@ -956,20 +964,21 @@ mod tests {
         let mut board = Board::new();
         board.initial_position();
 
-        // 测试WXF格式：红方车九进一
+        // 测试WXF格式：红方车九进一 - Red rook at (0,0), col 0 = file 9
         let result = board.move_text((0, 0), (0, 1), MoveFormat::WXF, false);
         assert!(result.is_ok());
         let text = result.unwrap();
         println!("WXF格式（红车）: {}", text);
         assert_eq!(text, "R9+1");
 
-        // 测试WXF格式：黑方车9进1
+        // 测试WXF格式：黑方车9进1 - Black rook at (0,9), col 0 = file 9
         let result = board.move_text((0, 9), (0, 8), MoveFormat::WXF, false);
         assert!(result.is_ok());
         let text = result.unwrap();
         println!("WXF格式（黑车）: {}", text);
+        assert_eq!(text, "R9+1");
 
-        // 测试WXF格式：红方炮二平五
+        // 测试WXF格式：红方炮二平五 - Red cannon at (7,2)
         let result = board.move_text((7, 2), (4, 2), MoveFormat::WXF, false);
         assert!(result.is_ok());
         let text = result.unwrap();
@@ -982,14 +991,14 @@ mod tests {
         let mut board = Board::new();
         board.initial_position();
 
-        // 测试ICCS格式（车九进一）
+        // 测试ICCS格式 - Red rook (0,0) → (0,1) = ICCS a0a1
         let result = board.move_text((0, 0), (0, 1), MoveFormat::ICCS, false);
         assert!(result.is_ok());
         let text = result.unwrap();
         println!("ICCS格式: {}", text);
         assert_eq!(text, "a0a1");
 
-        // 测试ICCS格式（炮二进一）
+        // 测试ICCS格式 - Red cannon (7,2) → (7,3) = ICCS h2h3
         let result = board.move_text((7, 2), (7, 3), MoveFormat::ICCS, false);
         assert!(result.is_ok());
         let text = result.unwrap();
@@ -1017,14 +1026,14 @@ mod tests {
         let mut board = Board::new();
         board.initial_position();
 
-        // 测试move_notation方法
+        // 测试move_notation方法 - Red rook (0,0) → (0,1)
         let result = board.move_notation((0, 0), (0, 1));
         assert!(result.is_ok());
         let notation = result.unwrap();
 
         assert_eq!(notation.piece_type, PieceType::Rook);
-        assert_eq!(notation.piece_color, Side::Black);
-        assert_eq!(notation.column, 9);
+        assert_eq!(notation.piece_color, Side::Red);
+        assert_eq!(notation.column, 9); // col 0 = 九路
         assert_eq!(notation.direction, Direction::Forward);
         assert_eq!(notation.distance, 1);
     }
@@ -1037,17 +1046,16 @@ mod tests {
         // 测试棋盘翻转
         let flipped = board.flip_perspective();
 
-        // 检查一些关键位置
-        // 红方右下角的车应该翻转到黑方左上角
-        assert_eq!(board.get_fen(0, 0), 'r'); // 红方车
-        assert_eq!(flipped.get_fen(8, 9), 'r'); // 翻转后
+        // Red rook at (0,0) should flip to Black's top-right (8,9)
+        assert_eq!(board.get_fen(0, 0), 'R'); // Red rook
+        assert_eq!(flipped.get_fen(8, 9), 'R'); // Flipped
 
-        // 黑方左上角的车应该翻转到红方右下角
-        assert_eq!(board.get_fen(0, 9), 'R'); // 黑方车
-        assert_eq!(flipped.get_fen(8, 0), 'R'); // 翻转后
+        // Black rook at (0,9) should flip to Red's bottom-right (8,0)
+        assert_eq!(board.get_fen(0, 9), 'r'); // Black rook
+        assert_eq!(flipped.get_fen(8, 0), 'r'); // Flipped
 
-        // 中心位置测试
-        assert_eq!(board.get_fen(4, 4), '.'); // 中心空位
-        assert_eq!(flipped.get_fen(4, 5), '.'); // 翻转后中心空位
+        // Center position test
+        assert_eq!(board.get_fen(4, 4), '.'); // Center empty
+        assert_eq!(flipped.get_fen(4, 5), '.'); // Flipped center empty
     }
 }

@@ -596,45 +596,14 @@ impl NotationConverter {
         Ok(((source_col, source_row), (dest_col, dest_row)))
     }
 
-    /// Parse ICCS notation to coordinates
+    /// Parse ICCS notation to Rust coordinates
     /// Format: col_row-col_row (e.g., H2-E2)
-    /// Columns: a-i (left to right from Red's perspective)
-    /// Rows: 0-9 (bottom to top from Red's perspective)
+    /// Columns: a-i (left to right)
+    /// Rows: 0-9 (Red's perspective: 0=bottom, 9=top)
+    /// Returns Rust coordinates (0=top/Black, 9=bottom/Red)
     pub fn parse_iccs(notation: &str) -> Result<((usize, usize), (usize, usize)), String> {
-        // Normalize: remove hyphens, convert to lowercase
-        let normalized = notation.replace('-', "").to_lowercase();
-
-        if normalized.len() < 4 {
-            return Err(format!("Invalid ICCS notation: {}", notation));
-        }
-
-        let chars: Vec<char> = normalized.chars().collect();
-
-        // Parse from position
-        let from_col = NotationConverter::iccs_col_to_index(chars[0])?;
-        let from_row = chars[1].to_digit(10).ok_or("Invalid from row")? as usize;
-
-        // Parse to position
-        let to_col = NotationConverter::iccs_col_to_index(chars[2])?;
-        let to_row = chars[3].to_digit(10).ok_or("Invalid to row")? as usize;
-
-        Ok(((from_col, from_row), (to_col, to_row)))
-    }
-
-    /// Convert ICCS column letter to index (a=0, b=1, ..., i=8)
-    fn iccs_col_to_index(c: char) -> Result<usize, String> {
-        match c {
-            'a' => Ok(0),
-            'b' => Ok(1),
-            'c' => Ok(2),
-            'd' => Ok(3),
-            'e' => Ok(4),
-            'f' => Ok(5),
-            'g' => Ok(6),
-            'h' => Ok(7),
-            'i' => Ok(8),
-            _ => Err(format!("Invalid ICCS column: {}", c)),
-        }
+        let mv = crate::move_notation::try_parse_iccs_move(notation)?;
+        Ok(((mv.from_col, mv.from_row), (mv.to_col, mv.to_row)))
     }
 
     /// Convert a FEN character to PieceType
@@ -712,7 +681,8 @@ impl NotationConverter {
         is_red: bool,
         _qualifier: Option<char>,
     ) -> Result<usize, String> {
-        let color = if is_red { Side::Black } else { Side::Red };
+        // Fix: is_red = true → look for Side::Red (uppercase)
+        let color = if is_red { Side::Red } else { Side::Black };
 
         // Find all pieces of this type and color on this column
         let mut positions: Vec<usize> = Vec::new();
@@ -898,13 +868,14 @@ impl NotationConverter {
         Ok((dest_col, dest_row))
     }
 
-    /// Convert coordinate move to ICCS notation
+    /// Convert coordinate move to ICCS notation (with hyphen)
+    /// Rust coordinates: (0=top/Black, 9=bottom/Red)
+    /// ICCS coordinates: (0=bottom/Red, 9=top/Black)
     pub fn to_iccs(from: (usize, usize), to: (usize, usize)) -> String {
-        let from_col = NotationConverter::index_to_iccs_col(from.0);
-        let from_row = from.1;
-        let to_col = NotationConverter::index_to_iccs_col(to.0);
-        let to_row = to.1;
-        format!("{}{}-{}{}", from_col, from_row, to_col, to_row)
+        let mv = crate::move_gen::Move::new(from.0, from.1, to.0, to.1);
+        let iccs = crate::move_notation::format_iccs_move(&mv);
+        // ICCS format in PGN uses hyphen: h2-e2
+        format!("{}-{}", &iccs[0..2], &iccs[2..4])
     }
 
     fn index_to_iccs_col(col: usize) -> char {
@@ -1186,7 +1157,7 @@ mod tests {
 
         // 炮二平五: Cannon on path 2 moves horizontally to path 5
         // Red's path 2 = col 7, path 5 = col 4
-        // Red cannons (lowercase 'c') are at row 2 in Board::new()
+        // Red cannons (uppercase 'C') are at row 2 in the new coordinate system
         let result = NotationConverter::parse_chinese("炮二平五", &board, true);
         assert!(result.is_ok());
         let ((from_col, from_row), (to_col, _to_row)) = result.unwrap();
@@ -1202,24 +1173,27 @@ mod tests {
 
         // 马8进7: Black knight on path 8 moves forward to path 7
         // Black's path 8 = col 1, path 7 = col 2
+        // Black knights (lowercase 'n') are at row 9 in new coords
+        // Black forward = decreasing row
         let result = NotationConverter::parse_chinese("马8进7", &board, false);
         assert!(result.is_ok());
         let ((from_col, from_row), (to_col, to_row)) = result.unwrap();
         assert_eq!(from_col, 1);
         assert_eq!(from_row, 9); // Black knight starting row
         assert_eq!(to_col, 2);
-        assert_eq!(to_row, 7); // Forward move for Black = lower row
+        assert_eq!(to_row, 7); // Forward move for Black = decreasing row
     }
 
     #[test]
     fn test_parse_iccs_notation() {
+        // ICCS "h2-e2" → internal coordinates (same system now)
         let result = NotationConverter::parse_iccs("h2-e2");
         assert!(result.is_ok());
         let ((from_col, from_row), (to_col, to_row)) = result.unwrap();
         assert_eq!(from_col, 7); // h = 7
-        assert_eq!(from_row, 2);
+        assert_eq!(from_row, 2); // ICCS row 2 = internal row 2
         assert_eq!(to_col, 4); // e = 4
-        assert_eq!(to_row, 2);
+        assert_eq!(to_row, 2); // ICCS row 2 = internal row 2
     }
 
     #[test]

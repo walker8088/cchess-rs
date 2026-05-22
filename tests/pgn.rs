@@ -522,17 +522,19 @@ fn test_black_chinese_notation() {
 
 #[test]
 fn test_iccs_notation() {
+    // ICCS "h2-e2" → internal coordinates (row 0 = Red bottom, row 2 = Red cannon)
     let result = NotationConverter::parse_iccs("h2-e2");
     assert!(result.is_ok());
     let ((from_col, from_row), (to_col, to_row)) = result.unwrap();
     assert_eq!(from_col, 7); // h = 7
-    assert_eq!(from_row, 2);
+    assert_eq!(from_row, 2); // ICCS row 2 = internal row 2 (Red cannon row)
     assert_eq!(to_col, 4); // e = 4
-    assert_eq!(to_row, 2);
+    assert_eq!(to_row, 2); // ICCS row 2 = internal row 2
 }
 
 #[test]
 fn test_iccs_roundtrip() {
+    // Internal coordinates (Red cannon at row 2) → ICCS "h2-e2"
     let from = (7, 2);
     let to = (4, 2);
     let iccs = NotationConverter::to_iccs(from, to);

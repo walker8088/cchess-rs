@@ -6,8 +6,19 @@ authors = ["Your Name"]
 description = "Chinese Chess (Xiangqi) implementation in Rust"
 license = "MIT"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 byteorder = "1.5"
 chrono = "0.4"
 encoding_rs = "0.8"
+pyo3 = { version = "0.20", features = ["extension-module"] }
+tokio = { version = "1", features = ["full"] }
+
+[features]
+python = []
+
+[dev-dependencies]
+
 # criterion = "0.5" # For benchmarking

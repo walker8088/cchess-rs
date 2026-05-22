@@ -211,13 +211,13 @@ impl Game {
         // Validate and execute the move
         let mut new_board = self.board.copy();
         if new_board.make_move(from, to) {
-            // Create UCI notation
+            // Create UCI notation (ICCS-aligned: row 0 = Red bottom)
             let uci_notation = format!(
                 "{}{}{}{}",
                 (b'a' + from.0 as u8) as char,
-                9 - from.1,
+                from.1,
                 (b'a' + to.0 as u8) as char,
-                9 - to.1
+                to.1
             );
 
             // Calculate move number
@@ -290,13 +290,13 @@ impl Game {
             return Err("Invalid move for variation".to_string());
         }
 
-        // Create UCI notation
+        // Create UCI notation (ICCS-aligned: row 0 = Red bottom)
         let uci_notation = format!(
             "{}{}{}{}",
             (b'a' + from.0 as u8) as char,
-            9 - from.1,
+            from.1,
             (b'a' + to.0 as u8) as char,
-            9 - to.1
+            to.1
         );
 
         // Create new variation node
