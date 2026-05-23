@@ -1,5 +1,5 @@
 /// PyO3 Python bindings for cchess-rs
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -2398,11 +2398,620 @@ fn fen_mirror_engine(fen: &str) -> String {
 }
 
 // ============================================================================
+// FenCache - FEN-to-action cache for storing engine recommendations
+// ============================================================================
+
+use pyo3::types::PyList;
+
+/// Simple FEN behavior cache for storing engine recommendations.
+#[pyclass(name = "FenCache")]
+#[derive(Clone)]
+pub struct PyFenCache {
+    fen_dict: std::collections::HashMap<String, Vec<(String, i64, Py<PyDict>)>>,
+    cache_file: String,
+    need_save: bool,
+}
+
+#[pymethods]
+impl PyFenCache {
+    #[new]
+    fn new() -> Self {
+        PyFenCache {
+            fen_dict: std::collections::HashMap::new(),
+            cache_file: String::new(),
+            need_save: false,
+        }
+    }
+
+    /// Get cached action info for a FEN.
+    /// Returns (action_dict, state_string) or (None, None).
+    fn get<'py>(&'py self, py: Python<'py>, fen: &str) -> (Option<Py<PyDict>>, Option<String>) {
+        if let Some(entries) = self.fen_dict.get(fen) {
+            let result = PyDict::new(py);
+            for (move_key, _score, action) in entries {
+                let _ = result.set_item(move_key, action.as_ref(py));
+            }
+            return (Some(result.into()), Some("".to_string()));
+        }
+
+        let f_mirror = fen_mirror(fen);
+        if let Some(entries) = self.fen_dict.get(&f_mirror) {
+            let result = PyDict::new(py);
+            for (move_key, _score, action) in entries {
+                let _ = result.set_item(move_key, action.as_ref(py));
+            }
+            return (Some(result.into()), Some("mirror".to_string()));
+        }
+
+        (None, None)
+    }
+
+    /// Get the best action for a given FEN from the cache.
+    #[pyo3(signature = (fen, move_color=0))]
+    fn get_best_action<'py>(
+        &self,
+        py: Python<'py>,
+        fen: &str,
+        move_color: i32,
+    ) -> PyResult<Option<Py<PyDict>>> {
+        let (action_opt, state) = self.get(py, fen);
+        let Some(action) = action_opt else {
+            return Ok(None);
+        };
+
+        let action_ref = action.as_ref(py);
+        let mut scored_actions: Vec<(i64, Py<PyDict>)> = Vec::new();
+
+        for key in action_ref.keys() {
+            let key_str: String = key.extract().unwrap_or_default();
+            if key_str.starts_with('_') || key_str == "fen_engine" {
+                continue;
+            }
+            if let Ok(Some(sub)) = action_ref.get_item(&key_str) {
+                if let Ok(sub_dict) = sub.downcast::<PyDict>() {
+                    if let Ok(Some(score_val)) = sub_dict.get_item("score") {
+                        if let Ok(score) = score_val.extract::<i64>() {
+                            let owned: Py<PyDict> = Py::from(sub_dict);
+                            scored_actions.push((score, owned));
+                        }
+                    }
+                }
+            }
+        }
+
+        if scored_actions.is_empty() {
+            return Ok(None);
+        }
+
+        scored_actions.sort_by_key(|(score, _)| *score);
+
+        let best = if move_color == 1 {
+            scored_actions.first().unwrap().1.clone()
+        } else if move_color == -1 {
+            scored_actions.last().unwrap().1.clone()
+        } else {
+            scored_actions.first().unwrap().1.clone()
+        };
+
+        if state.as_deref() == Some("mirror") {
+            let result = action_mirror(py, best.as_ref(py))?;
+            Ok(Some(result))
+        } else {
+            Ok(Some(best))
+        }
+    }
+
+    /// Save an action for a FEN to the cache.
+    fn save_action(&mut self, py: Python<'_>, fen: &str, action: &PyDict) -> PyResult<()> {
+        let move_key = action
+            .get_item("move")?
+            .map(|v| v.extract::<String>())
+            .transpose()?
+            .unwrap_or_default();
+
+        let score = action
+            .get_item("score")?
+            .map(|v| v.extract::<i64>())
+            .transpose()?
+            .unwrap_or(0);
+
+        let owned: Py<PyDict> = Py::from(action);
+
+        self.fen_dict
+            .entry(fen.to_string())
+            .or_insert_with(Vec::new)
+            .push((move_key, score, owned));
+
+        self.need_save = true;
+        Ok(())
+    }
+
+    /// Save the cache to a JSON file.
+    #[pyo3(signature = (path=None))]
+    fn save(&self, py: Python<'_>, path: Option<&str>) -> PyResult<()> {
+        let file_path = path.filter(|p| !p.is_empty()).unwrap_or(&self.cache_file);
+
+        if file_path.is_empty() {
+            return Err(PyValueError::new_err(
+                "No cache file path set. Call save() with a path argument first.",
+            ));
+        }
+
+        // Build JSON structure: { fen: { move_key: { field: value, ... }, ... }, ... }
+        use serde_json::Map as JsonMap;
+        let mut json_map: JsonMap<String, serde_json::Value> = JsonMap::new();
+
+        for (fen, entries) in &self.fen_dict {
+            let mut fen_entry: JsonMap<String, serde_json::Value> = JsonMap::new();
+            for (move_key, _score, action_py) in entries {
+                let dict = action_py.as_ref(py);
+                let mut sub_entry: JsonMap<String, serde_json::Value> = JsonMap::new();
+                for key in dict.keys() {
+                    let k_str: String = key.extract().unwrap_or_default();
+                    if let Ok(Some(val)) = dict.get_item(&k_str) {
+                        sub_entry.insert(k_str, python_value_to_json(py, val));
+                    }
+                }
+                fen_entry.insert(move_key.clone(), serde_json::Value::Object(sub_entry));
+            }
+            json_map.insert(fen.clone(), serde_json::Value::Object(fen_entry));
+        }
+
+        let json_str = serde_json::to_string_pretty(&json_map)
+            .map_err(|e| PyValueError::new_err(format!("Failed to serialize cache: {}", e)))?;
+
+        std::fs::write(file_path, json_str)
+            .map_err(|e| PyIOError::new_err(format!("Failed to write cache file: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Load the cache from a JSON file.
+    fn load(&mut self, py: Python<'_>, path: &str) -> PyResult<()> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| PyIOError::new_err(format!("Failed to read cache file: {}", e)))?;
+
+        use serde_json::Map as JsonMap;
+        let json_map: JsonMap<String, serde_json::Value> = serde_json::from_str(&content)
+            .map_err(|e| PyValueError::new_err(format!("Failed to parse cache file: {}", e)))?;
+
+        self.fen_dict.clear();
+        for (fen, fen_value) in json_map {
+            if let serde_json::Value::Object(fen_obj) = fen_value {
+                let mut entries = Vec::new();
+                for (move_key, sub_value) in fen_obj {
+                    if let serde_json::Value::Object(sub_obj) = sub_value {
+                        let dict = PyDict::new(py);
+                        let score = sub_obj.get("score").and_then(|v| v.as_i64()).unwrap_or(0);
+                        for (k, v) in &sub_obj {
+                            let py_val = json_value_to_python(py, v.clone())?;
+                            let _ = dict.set_item(k, py_val);
+                        }
+                        let owned: Py<PyDict> = dict.into();
+                        entries.push((move_key, score, owned));
+                    }
+                }
+                self.fen_dict.insert(fen, entries);
+            }
+        }
+
+        self.cache_file = path.to_string();
+        Ok(())
+    }
+
+    #[getter]
+    fn cache_file(&self) -> &str {
+        &self.cache_file
+    }
+
+    #[getter]
+    fn need_save(&self) -> bool {
+        self.need_save
+    }
+}
+
+// Helper functions for Python <-> JSON conversion
+fn python_value_to_json(py: Python<'_>, value: &PyAny) -> serde_json::Value {
+    if value.is_none() {
+        serde_json::Value::Null
+    } else if let Ok(b) = value.extract::<bool>() {
+        serde_json::Value::Bool(b)
+    } else if let Ok(i) = value.extract::<i64>() {
+        serde_json::Value::Number(i.into())
+    } else if let Ok(f) = value.extract::<f64>() {
+        serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null)
+    } else if let Ok(s) = value.extract::<String>() {
+        serde_json::Value::String(s)
+    } else if let Ok(list) = value.downcast::<PyList>() {
+        let arr: Vec<serde_json::Value> = list
+            .iter()
+            .map(|item| python_value_to_json(py, item))
+            .collect();
+        serde_json::Value::Array(arr)
+    } else {
+        serde_json::Value::String(value.to_string())
+    }
+}
+
+fn json_value_to_python<'py>(py: Python<'py>, value: serde_json::Value) -> PyResult<PyObject> {
+    Ok(match value {
+        serde_json::Value::Null => py.None(),
+        serde_json::Value::Bool(b) => b.into_py(py),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.into_py(py)
+            } else if let Some(f) = n.as_f64() {
+                f.into_py(py)
+            } else {
+                py.None()
+            }
+        }
+        serde_json::Value::String(s) => s.into_py(py),
+        serde_json::Value::Array(arr) => {
+            let list = PyList::empty(py);
+            for item in arr {
+                let py_val = json_value_to_python(py, item)?;
+                list.append(py_val)
+                    .map_err(|_| PyValueError::new_err("Failed to append to list"))?;
+            }
+            list.into()
+        }
+        serde_json::Value::Object(obj) => {
+            let dict = PyDict::new(py);
+            for (k, v) in obj {
+                let py_val = json_value_to_python(py, v)?;
+                let _ = dict.set_item(&k, py_val);
+            }
+            dict.into()
+        }
+    })
+}
+
+// ============================================================================
+// EngineManager - Facade for loading, configuring, and querying engines
+// ============================================================================
+
+/// Engine Manager facade for loading, configuring engines and running searches.
+#[pyclass(name = "EngineManager")]
+pub struct PyEngineManager {
+    engine: Option<Child>,
+    engine_stdin: Option<ChildStdin>,
+    engine_reader: Option<BufReader<ChildStdout>>,
+    protocol: String,
+    go_params: Vec<(String, String)>,
+    cache: PyFenCache,
+    last_fen: String,
+}
+
+#[pymethods]
+impl PyEngineManager {
+    #[new]
+    #[pyo3(signature = (cache=None))]
+    fn new(cache: Option<PyFenCache>) -> Self {
+        PyEngineManager {
+            engine: None,
+            engine_stdin: None,
+            engine_reader: None,
+            protocol: String::new(),
+            go_params: Vec::new(),
+            cache: cache.unwrap_or_else(PyFenCache::new),
+            last_fen: String::new(),
+        }
+    }
+
+    /// Load and initialize a UCI engine.
+    #[pyo3(signature = (engine_exec, options=None, go_params=None))]
+    fn load_uci(
+        &mut self,
+        engine_exec: &str,
+        options: Option<&PyDict>,
+        go_params: Option<&PyDict>,
+    ) -> PyResult<bool> {
+        self._load(engine_exec, "uci", options, go_params)
+    }
+
+    /// Load and initialize a UCCI engine.
+    #[pyo3(signature = (engine_exec, options=None, go_params=None))]
+    fn load_ucci(
+        &mut self,
+        engine_exec: &str,
+        options: Option<&PyDict>,
+        go_params: Option<&PyDict>,
+    ) -> PyResult<bool> {
+        self._load(engine_exec, "ucci", options, go_params)
+    }
+
+    fn _load(
+        &mut self,
+        engine_exec: &str,
+        protocol: &str,
+        options: Option<&PyDict>,
+        go_params: Option<&PyDict>,
+    ) -> PyResult<bool> {
+        let path = PathBuf::from(engine_exec);
+        if !path.exists() {
+            return Err(PyValueError::new_err(format!(
+                "Engine not found: {}",
+                engine_exec
+            )));
+        }
+
+        let dir = path
+            .parent()
+            .ok_or_else(|| PyValueError::new_err("Engine path has no parent directory"))?
+            .to_path_buf();
+
+        let mut child = Command::new(&path)
+            .current_dir(&dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| PyEngineError::new_err(format!("Failed to spawn engine: {}", e)))?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| PyEngineError::new_err("Failed to capture stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| PyEngineError::new_err("Failed to capture stdout"))?;
+
+        let reader = BufReader::new(stdout);
+
+        self.engine = Some(child);
+        self.engine_stdin = Some(stdin);
+        self.engine_reader = Some(reader);
+        self.protocol = protocol.to_string();
+
+        // Send init command
+        let init_cmd = if protocol == "uci" { "uci" } else { "ucci" };
+        let ok_resp = if protocol == "uci" { "uciok" } else { "ucciok" };
+
+        self._send_cmd(init_cmd)?;
+
+        // Wait for init response
+        let ready = self._wait_for(ok_resp, 10000)?;
+        if !ready {
+            return Err(PyEngineError::new_err("Engine failed to initialize"));
+        }
+
+        // Apply options
+        if let Some(opts) = options {
+            for item in opts.items().iter() {
+                let tuple = item
+                    .downcast::<pyo3::types::PyTuple>()
+                    .map_err(|_| PyEngineError::new_err("Option item is not a tuple"))?;
+                let key_str: String = tuple
+                    .get_item(0)?
+                    .extract()
+                    .map_err(|_| PyValueError::new_err("Option key must be a string"))?;
+                let value_str: String = tuple
+                    .get_item(1)?
+                    .extract()
+                    .map_err(|_| PyValueError::new_err("Option value must be a string"))?;
+                self._setoption(&key_str, &value_str)?;
+            }
+        }
+
+        // Store go params
+        self.go_params.clear();
+        if let Some(gp) = go_params {
+            for item in gp.items().iter() {
+                let tuple = item
+                    .downcast::<pyo3::types::PyTuple>()
+                    .map_err(|_| PyEngineError::new_err("Go param item is not a tuple"))?;
+                let key_str: String = tuple
+                    .get_item(0)?
+                    .extract()
+                    .map_err(|_| PyValueError::new_err("Go param key must be a string"))?;
+                let value_str: String = tuple
+                    .get_item(1)?
+                    .extract()
+                    .map_err(|_| PyValueError::new_err("Go param value must be a string"))?;
+                self.go_params.push((key_str, value_str));
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Get best action from cache for a FEN.
+    #[pyo3(signature = (fen, move_color=0))]
+    fn get_best_cache(
+        &self,
+        py: Python<'_>,
+        fen: &str,
+        move_color: i32,
+    ) -> PyResult<Option<PyObject>> {
+        self.cache
+            .get_best_action(py, fen, move_color)
+            .map(|opt| opt.map(|p| p.into()))
+    }
+
+    /// Get score/action for a FEN. Tries cache first, then runs engine.
+    #[pyo3(signature = (fen, move_color=0))]
+    fn get_fen_score(&mut self, py: Python<'_>, fen: &str, move_color: i32) -> PyResult<PyObject> {
+        if let Some(action) = self.get_best_cache(py, fen, move_color)? {
+            return Ok(action);
+        }
+        self.run_engine(py, fen)
+    }
+
+    /// Run the engine on a position and return the best action.
+    fn run_engine(&mut self, py: Python<'_>, fen: &str) -> PyResult<PyObject> {
+        if self.engine.is_none() {
+            return Err(PyEngineError::new_err("Engine not loaded"));
+        }
+
+        // Send position
+        self._send_cmd(&format!("position fen {}", fen))?;
+
+        // Build go command
+        let mut go_cmd = String::from("go");
+        for (key, value) in &self.go_params {
+            go_cmd.push_str(&format!(" {} {}", key, value));
+        }
+        self._send_cmd(&go_cmd)?;
+
+        // Read until bestmove
+        let mut bestmove: Option<String> = None;
+        let mut score: Option<i64> = None;
+        let mut mate: Option<i32> = None;
+        let mut moves_list: Vec<String> = Vec::new();
+
+        if let Some(reader) = &mut self.engine_reader {
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let n = reader
+                    .read_line(&mut line)
+                    .map_err(|e| PyEngineError::new_err(format!("Read error: {}", e)))?;
+                if n == 0 {
+                    break;
+                }
+                let trimmed = line.trim_end().to_string();
+
+                if trimmed.starts_with("bestmove") {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        bestmove = Some(parts[1].to_string());
+                    }
+                    break;
+                }
+
+                if trimmed.starts_with("info") {
+                    if let Some(score_info) = trimmed.split("score ").nth(1) {
+                        if let Some(cp_str) = score_info.split("cp ").nth(1) {
+                            if let Some(cp_val) = cp_str.split_whitespace().next() {
+                                if let Ok(cp) = cp_val.parse::<i64>() {
+                                    score = Some(cp);
+                                }
+                            }
+                        }
+                        if let Some(mate_str) = score_info.split("mate ").nth(1) {
+                            if let Some(mate_val) = mate_str.split_whitespace().next() {
+                                if let Ok(m) = mate_val.parse::<i32>() {
+                                    mate = Some(m);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(pv_str) = trimmed.split(" pv ").nth(1) {
+                        moves_list = pv_str.split_whitespace().map(|s| s.to_string()).collect();
+                    }
+                }
+            }
+        }
+
+        let bm =
+            bestmove.ok_or_else(|| PyEngineError::new_err("Engine did not return bestmove"))?;
+
+        // Build action dict
+        let action = PyDict::new(py);
+        let _ = action.set_item("move", &bm);
+        if let Some(s) = score {
+            let _ = action.set_item("score", -s);
+        }
+        if let Some(m) = mate {
+            let _ = action.set_item("mate", -m);
+            let checkmate_score: i64 = 30000;
+            let sign: i64 = if m > 0 { 1 } else { -1 };
+            let _ = action.set_item("score", (checkmate_score - m.abs() as i64) * sign);
+        }
+        if !moves_list.is_empty() {
+            let py_moves: Vec<&str> = moves_list.iter().map(|s| s.as_str()).collect();
+            let _ = action.set_item("moves", py_moves);
+        }
+        let _ = action.set_item("fen_engine", fen);
+
+        // Save to cache
+        let _ = self.cache.save_action(py, fen, action);
+
+        self.last_fen = fen.to_string();
+
+        Ok(action.into())
+    }
+
+    /// Terminate the engine.
+    fn quit(&mut self) {
+        let _ = self._send_cmd("quit");
+        if let Some(child) = &mut self.engine {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.engine = None;
+        self.engine_stdin = None;
+        self.engine_reader = None;
+    }
+
+    /// Send a raw command to the engine.
+    fn send_cmd(&mut self, cmd: &str) -> PyResult<()> {
+        self._send_cmd(cmd)
+    }
+
+    fn __del__(&mut self) {
+        self.quit();
+    }
+}
+
+impl PyEngineManager {
+    fn _send_cmd(&mut self, cmd: &str) -> PyResult<()> {
+        let stdin = self
+            .engine_stdin
+            .as_mut()
+            .ok_or_else(|| PyEngineError::new_err("Engine not connected"))?;
+        writeln!(stdin, "{}", cmd)
+            .map_err(|e| PyEngineError::new_err(format!("Failed to write: {}", e)))
+    }
+
+    fn _setoption(&mut self, name: &str, value: &str) -> PyResult<()> {
+        let cmd = if self.protocol == "uci" {
+            format!("setoption name {} value {}", name, value)
+        } else {
+            format!("setoption {} {}", name, value)
+        };
+        self._send_cmd(&cmd)
+    }
+
+    fn _wait_for(&mut self, prefix: &str, timeout_ms: u64) -> PyResult<bool> {
+        let reader = self
+            .engine_reader
+            .as_mut()
+            .ok_or_else(|| PyEngineError::new_err("Engine not connected"))?;
+
+        let start = Instant::now();
+        let mut line = String::new();
+
+        loop {
+            if start.elapsed() > Duration::from_millis(timeout_ms) {
+                return Ok(false);
+            }
+
+            line.clear();
+            let n = reader
+                .read_line(&mut line)
+                .map_err(|e| PyEngineError::new_err(format!("Read error: {}", e)))?;
+            if n == 0 {
+                return Ok(false);
+            }
+            let trimmed = line.trim_end();
+            if trimmed == prefix || trimmed.starts_with(prefix) {
+                return Ok(true);
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Python Module
 // ============================================================================
 
 #[pymodule]
-fn cchess(_py: Python, m: &PyModule) -> PyResult<()> {
+fn cchess_rs(_py: Python, m: &PyModule) -> PyResult<()> {
     // Enums
     m.add_class::<PySide>()?;
     m.add_class::<PyPieceType>()?;
@@ -2422,6 +3031,8 @@ fn cchess(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PySearchInfo>()?;
     m.add_class::<PySearchResult>()?;
     m.add_class::<PyEngineProcess>()?;
+    m.add_class::<PyFenCache>()?;
+    m.add_class::<PyEngineManager>()?;
 
     // Exceptions
     m.add("CChessError", _py.get_type::<PyCChessError>())?;
