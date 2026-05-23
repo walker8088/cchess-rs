@@ -148,9 +148,10 @@ impl Board {
         }
     }
 
-    /// Make a move on the board
-    /// Validates piece-specific movement rules before executing
-    pub fn make_move(&mut self, from: (usize, usize), to: (usize, usize)) -> bool {
+    /// Check if a move is legal according to piece-specific movement rules.
+    /// This does NOT check the fly-king rule (将帅照面).
+    /// That is checked separately after making the move.
+    pub fn is_legal_move(&self, from: (usize, usize), to: (usize, usize)) -> bool {
         let (from_col, from_row) = from;
         let (to_col, to_row) = to;
 
@@ -189,7 +190,7 @@ impl Board {
         }
 
         // 根据棋子类型验证走法
-        let valid = match piece_type {
+        match piece_type {
             PieceType::King => self.validate_king_move(from_col, from_row, to_col, to_row, is_red),
             PieceType::Advisor => {
                 self.validate_advisor_move(from_col, from_row, to_col, to_row, is_red)
@@ -203,19 +204,38 @@ impl Board {
                 self.validate_cannon_move(from_col, from_row, to_col, to_row, target_piece != '.')
             }
             PieceType::Pawn => self.validate_pawn_move(from_col, from_row, to_col, to_row, is_red),
-        };
+        }
+    }
 
-        if !valid {
+    /// Apply a move to the board without validation.
+    /// Caller must ensure the move is legal.
+    pub fn apply_move(&mut self, from: (usize, usize), to: (usize, usize)) {
+        let (from_col, from_row) = from;
+        let (to_col, to_row) = to;
+        let moving_piece = self.squares[from_row][from_col];
+        self.squares[to_row][to_col] = moving_piece;
+        self.squares[from_row][from_col] = '.';
+    }
+
+    /// Make a move on the board with full validation.
+    /// Returns true if the move was successful, false if illegal.
+    pub fn make_move(&mut self, from: (usize, usize), to: (usize, usize)) -> bool {
+        let (from_col, from_row) = from;
+        let (to_col, to_row) = to;
+
+        // Step 1: Validate piece-specific movement rules
+        if !self.is_legal_move(from, to) {
             return false;
         }
 
-        // 执行走法（临时）
-        self.squares[to_row][to_col] = moving_piece;
-        self.squares[from_row][from_col] = '.';
+        // Step 2: Tentatively apply the move
+        let moving_piece = self.squares[from_row][from_col];
+        let target_piece = self.squares[to_row][to_col];
+        self.apply_move(from, to);
 
-        // 检查飞将规则（将帅不能照面）
+        // Step 3: Check fly-king rule (将帅不能照面)
         if self.kings_are_facing() {
-            // 撤销走法
+            // Undo the move
             self.squares[from_row][from_col] = moving_piece;
             self.squares[to_row][to_col] = target_piece;
             return false;
@@ -463,6 +483,7 @@ impl Board {
     /// Check if kings are facing each other (飞将规则)
     /// Kings on the same column with no pieces between them is illegal
     fn kings_are_facing(&self) -> bool {
+        // In FEN: Red pieces are uppercase (K=Red King), Black pieces are lowercase (k=Black King)
         let mut red_king_pos: Option<(usize, usize)> = None;
         let mut black_king_pos: Option<(usize, usize)> = None;
 
@@ -470,9 +491,9 @@ impl Board {
         for row in 0..10 {
             for col in 0..9 {
                 let fen = self.squares[row][col];
-                if fen == 'k' {
+                if fen == 'K' {
                     red_king_pos = Some((col, row));
-                } else if fen == 'K' {
+                } else if fen == 'k' {
                     black_king_pos = Some((col, row));
                 }
             }
@@ -752,10 +773,10 @@ impl Board {
         true
     }
 
-    /// Find king position for given side. Red king='k' (lowercase), Black king='K' (uppercase)
-    /// Note: In this codebase, Red=lowercase (rows 0-2), Black=uppercase (rows 7-9)
+    /// Find king position for given side. Red king='K' (uppercase), Black king='k' (lowercase)
+    /// Note: Red=uppercase (rows 0-2), Black=lowercase (rows 7-9)
     pub fn find_king(&self, is_red: bool) -> Option<(usize, usize)> {
-        let king_char = if is_red { 'k' } else { 'K' };
+        let king_char = if is_red { 'K' } else { 'k' };
         let (min_row, max_row) = if is_red { (0, 2) } else { (7, 9) };
         for row in min_row..=max_row {
             for col in 3..=5 {
@@ -830,14 +851,15 @@ impl Board {
 
         // Check if opponent king is under attack
         if let Some((kx, ky)) = test_board.get_king_pos(opponent_side) {
-            test_board.is_under_attack(kx, ky, is_red)
+            test_board.is_square_attacked_by(kx, ky, is_red)
         } else {
             false
         }
     }
 
-    /// Check if a position is under attack by a given side
-    fn is_under_attack(&self, col: usize, row: usize, by_red: bool) -> bool {
+    /// Check if a square is attacked by a given side.
+    /// `by_red`: true if checking whether Red pieces can attack this square.
+    pub fn is_square_attacked_by(&self, col: usize, row: usize, by_red: bool) -> bool {
         // Check rook/cannon/king lines
         for &dx in &[-1isize, 0, 1] {
             for &dy in &[-1isize, 0, 1] {
@@ -855,10 +877,8 @@ impl Board {
                             let c_is_red = c_side == Some(Side::Red);
                             if c_is_red == by_red {
                                 let pt = PieceType::from_fen(c);
+                                // First piece: Rook/King can attack directly
                                 if pt == Some(PieceType::Rook) || pt == Some(PieceType::King) {
-                                    return true;
-                                }
-                                if pt == Some(PieceType::Cannon) && screen_count == 1 {
                                     return true;
                                 }
                             }
@@ -993,7 +1013,7 @@ impl Board {
     pub fn is_in_check(&self, side: Side) -> bool {
         let is_red = side == Side::Red;
         if let Some((kx, ky)) = self.get_king_pos(side) {
-            self.is_under_attack(kx, ky, !is_red)
+            self.is_square_attacked_by(kx, ky, !is_red)
         } else {
             false
         }
@@ -1225,8 +1245,8 @@ impl Board {
             for col in 0..9 {
                 let fen_char = self.squares[row][col];
                 if fen_char != '.' {
-                    let is_lower = fen_char.is_lowercase();
-                    if (is_red && is_lower) || (!is_red && !is_lower) {
+                    // Red pieces are uppercase
+                    if (is_red && fen_char.is_uppercase()) || (!is_red && fen_char.is_lowercase()) {
                         count += 1;
                     }
                 }
@@ -1261,8 +1281,8 @@ impl Board {
             for col in 0..9 {
                 let fen_char = self.squares[row][col];
                 if fen_char != '.' {
-                    let is_lower = fen_char.is_lowercase();
-                    if (is_red && is_lower) || (!is_red && !is_lower) {
+                    // Red pieces are uppercase
+                    if (is_red && fen_char.is_uppercase()) || (!is_red && fen_char.is_lowercase()) {
                         positions.push((col, row, fen_char));
                     }
                 }
